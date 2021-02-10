@@ -418,8 +418,7 @@ wal_writer_create(struct wal_writer *writer, enum wal_mode wal_mode,
 	journal_create(&writer->base,
 		       wal_mode == WAL_NONE ?
 		       wal_write_none_async : wal_write_async,
-		       wal_mode == WAL_NONE ?
-		       wal_write_none : wal_write);
+		       wal_mode == WAL_NONE ? wal_write_none : wal_write);
 
 	struct xlog_opts opts = xlog_opts_default;
 	opts.sync_is_async = true;

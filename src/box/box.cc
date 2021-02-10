@@ -253,7 +253,7 @@ box_process_rw(struct request *request, struct space *space,
 		if (is_local_recovery) {
 			res = txn_commit_async(txn);
 		} else {
-			res = txn_commit(txn);
+			res = txn_commit(txn, false);
 		}
 		if (res < 0)
 			goto error;
@@ -3003,7 +3003,8 @@ box_cfg_xc(void)
 	}
 
 	struct journal bootstrap_journal;
-	journal_create(&bootstrap_journal, NULL, bootstrap_journal_write);
+	journal_create(&bootstrap_journal, bootstrap_journal_write,
+				bootstrap_journal_write);
 	journal_set(&bootstrap_journal);
 	auto bootstrap_journal_guard = make_scoped_guard([] {
 		journal_set(NULL);
