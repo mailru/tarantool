@@ -296,6 +296,64 @@ box_tuple_validate(box_tuple_t *tuple, box_tuple_format_t *format);
 
 /** \endcond public */
 
+#define MAX_TINY_DATA_OFFSET 63
+
+/** Part of struct tuple. */
+struct tiny_tuple_props {
+	/**
+	 * Tuple is tiny in case it's bsize fits in 1 byte,
+	 * it's data_offset fits in 6 bits and field map
+	 * offsets fit into 1 byte each.
+	 */
+	bool is_tiny : 1;
+	/**
+	 * The tuple (if it's found in index for example) could be invisible
+	 * for current transactions. The flag means that the tuple must
+	 * be clarified by the transaction engine.
+	 */
+	bool is_dirty : 1;
+	/**
+	 * Offset to the MessagePack from the beginning of the
+	 * tuple. 6 bits in case tuple is tiny.
+	 */
+	uint8_t data_offset : 6;
+	/**
+	 * Length of the MessagePack data in raw part of the
+	 * tuple. 8 bits in case tuple is tiny.
+	 */
+	uint8_t bsize;
+};
+
+/** Part of struct tuple. */
+struct tuple_props {
+	/**
+	 * Tuple is tiny in case it's bsize fits in 1 byte,
+	 * it's data_offset fits in 6 bits and field map
+	 * offsets fit into 1 byte each.
+	 */
+	bool is_tiny : 1;
+	/**
+	 * Offset to the MessagePack from the beginning of the
+	 * tuple. 15 bits in case tuple is not tiny.
+	 */
+	uint16_t data_offset: 15;
+};
+
+/** Part of struct tuple. */
+struct PACKED tuple_extra {
+	/**
+	 * The tuple (if it's found in index for example) could be invisible
+	 * for current transactions. The flag means that the tuple must
+	 * be clarified by the transaction engine.
+	 */
+	bool is_dirty : 1;
+	/**
+	 * Length of the MessagePack data in raw part of the
+	 * tuple. 31 bits in case tuple is not tiny.
+	 */
+	uint32_t bsize : 31;
+};
+
 /**
  * An atom of Tarantool storage. Represents MsgPack Array.
  * Tuple has the following structure:
@@ -323,20 +381,40 @@ struct PACKED tuple
 	/** Format identifier. */
 	uint16_t format_id;
 	/**
-	 * Length of the MessagePack data in raw part of the
-	 * tuple.
+	 * Both structs in the following union contain is_tiny bit
+	 * as the first field. It is guaranteed it will be the same
+	 * for both of them in any case. Tuple is tiny in case it's
+	 * bsize fits in 1 byte, it's data_offset fits in 6 bits and
+	 * field map offsets fit into 1 byte each. In case it is tiny
+	 * we will obtain data_offset, bsize and is_dirty flag from the
+	 * struct tiny_tuple_props. Otherwise we will obtain data_offset
+	 * from struct tuple_props, while bsize and is_dirty flag will be
+	 * stored in struct tuple_extra (4 bytes at the end of the tuple).
 	 */
-	uint32_t bsize;
+	union {
+		/**
+		 * In case the tuple is tiny this struct is used to obtain
+		 * data_offset (offset to the MessagePack from the beginning
+		 * of the tuple), bsize (the length of the MessagePack data
+		 * in the raw part of the tuple) and is_dirty flag (true if
+		 * the tuple must be clarified by transaction engine).
+		 */
+		struct tiny_tuple_props tiny_props;
+		/**
+		 * In case the tuple is not tiny this struct is used to obtain
+		 * data_offset (offset to the MessagePack from the beginning of
+		 * the tuple).
+		 */
+		struct tuple_props props;
+	};
 	/**
-	 * Offset to the MessagePack from the begin of the tuple.
+	 * In case the tuple is not tiny this struct contains is_dirty
+	 * flag (true if the tuple must be clarified by transaction
+	 * engine) and bsize (the length of the MessagePack data
+	 * in the raw part of the tuple).
+	 * If the tuple is tiny, this fields is 0 bytes.
 	 */
-	uint16_t data_offset : 15;
-	/**
-	 * The tuple (if it's found in index for example) could be invisible
-	 * for current transactions. The flag means that the tuple must
-	 * be clarified by transaction engine.
-	 */
-	bool is_dirty : 1;
+	struct tuple_extra extra[];
 	/**
 	 * Engine specific fields and offsets array concatenated
 	 * with MessagePack fields array.
@@ -344,12 +422,125 @@ struct PACKED tuple
 	 */
 };
 
+/**
+ * According to C standard sections 6.5.2.3-5 it is guaranteed
+ * if a union contains several structures that share a common
+ * initial sequence of members (bool is_tiny in this case), it is
+ * permitted to inspect the common initial part of any of them
+ * anywhere that a declaration of the complete type of the union
+ * is visible. Two structures share a common initial sequence if
+ * corresponding members have compatible types (and, for
+ * bit-fields, the same widths) for a sequence of one or more
+ * initial members. Thus we are guaranteed that is_tiny bit is
+ * same for both struct tiny_tuple_props and struct tuple_props
+ * and we can simply read or write any of them.
+ */
+static inline void
+tuple_set_tiny_bit(struct tuple *tuple, bool is_tiny)
+{
+	assert(tuple != NULL);
+	tuple->props.is_tiny = is_tiny;
+}
+
+static inline bool
+tuple_is_tiny(struct tuple *tuple)
+{
+	assert(tuple != NULL);
+	return tuple->props.is_tiny;
+}
+
+static inline void
+tiny_tuple_set_dirty_bit(struct tuple *tuple, bool is_dirty)
+{
+	tuple->tiny_props.is_dirty = is_dirty;
+}
+
+static inline void
+basic_tuple_set_dirty_bit(struct tuple *tuple, bool is_dirty)
+{
+	tuple->extra->is_dirty = is_dirty;
+}
+
+static inline void
+tuple_set_dirty_bit(struct tuple *tuple, bool is_dirty)
+{
+	assert(tuple != NULL);
+	tuple->props.is_tiny ? tiny_tuple_set_dirty_bit(tuple, is_dirty) :
+			       basic_tuple_set_dirty_bit(tuple, is_dirty);
+}
+
+static inline bool
+tuple_is_dirty(struct tuple *tuple)
+{
+	assert(tuple != NULL);
+	return tuple->props.is_tiny ? tuple->tiny_props.is_dirty :
+				      tuple->extra->is_dirty;
+}
+
+static inline void
+tiny_tuple_set_bsize(struct tuple *tuple, uint32_t bsize)
+{
+	assert(bsize <= UINT8_MAX); /* bsize has to fit in UINT8_MAX */
+	tuple->tiny_props.bsize = bsize;
+}
+
+static inline void
+basic_tuple_set_bsize(struct tuple *tuple, uint32_t bsize)
+{
+	assert(bsize <= INT32_MAX); /* bsize has to fit in INT32_MAX */
+	tuple->extra->bsize = bsize;
+}
+
+static inline void
+tuple_set_bsize(struct tuple *tuple, uint32_t bsize)
+{
+	assert(tuple != NULL);
+	tuple->props.is_tiny ? tiny_tuple_set_bsize(tuple, bsize) :
+			       basic_tuple_set_bsize(tuple, bsize);
+}
+
+static inline uint32_t
+tuple_bsize(struct tuple *tuple)
+{
+	assert(tuple != NULL);
+	return tuple->props.is_tiny ? tuple->tiny_props.bsize :
+				      tuple->extra->bsize;
+}
+
+static inline void
+tiny_tuple_set_data_offset(struct tuple *tuple, uint8_t data_offset)
+{
+	tuple->tiny_props.data_offset = data_offset;
+}
+
+static inline void
+basic_tuple_set_data_offset(struct tuple *tuple, uint16_t data_offset)
+{
+	tuple->props.data_offset = data_offset;
+}
+
+static inline void
+tuple_set_data_offset(struct tuple *tuple, uint16_t data_offset)
+{
+	assert(tuple != NULL);
+	tuple->props.is_tiny ? tiny_tuple_set_data_offset(tuple, data_offset) :
+			       basic_tuple_set_data_offset(tuple, data_offset);
+}
+
+static inline uint16_t
+tuple_data_offset(struct tuple *tuple)
+{
+	assert(tuple != NULL);
+	return tuple->props.is_tiny ? tuple->tiny_props.data_offset :
+				      tuple->props.data_offset;
+}
+
 /** Size of the tuple including size of struct tuple. */
 static inline size_t
 tuple_size(struct tuple *tuple)
 {
 	/* data_offset includes sizeof(struct tuple). */
-	return tuple->data_offset + tuple->bsize;
+	return tuple_data_offset(tuple) + tuple_bsize(tuple);
 }
 
 /**
@@ -360,7 +551,7 @@ tuple_size(struct tuple *tuple)
 static inline const char *
 tuple_data(struct tuple *tuple)
 {
-	return (const char *) tuple + tuple->data_offset;
+	return (const char *)tuple + tuple_data_offset(tuple);
 }
 
 /**
@@ -381,8 +572,8 @@ tuple_data_or_null(struct tuple *tuple)
 static inline const char *
 tuple_data_range(struct tuple *tuple, uint32_t *p_size)
 {
-	*p_size = tuple->bsize;
-	return (const char *) tuple + tuple->data_offset;
+	*p_size = tuple_bsize(tuple);
+	return (const char *)tuple + tuple_data_offset(tuple);
 }
 
 /**
@@ -532,10 +723,10 @@ tuple_validate(struct tuple_format *format, struct tuple *tuple)
  * @returns a field map for the tuple.
  * @sa tuple_field_map_create()
  */
-static inline const uint32_t *
+static inline const uint8_t *
 tuple_field_map(struct tuple *tuple)
 {
-	return (const uint32_t *) ((const char *) tuple + tuple->data_offset);
+	return (uint8_t *)tuple + tuple_data_offset(tuple);
 }
 
 /**
@@ -612,9 +803,10 @@ tuple_field_go_to_key(const char **field, const char *key, int len);
  */
 static inline const char *
 tuple_field_raw_by_path(struct tuple_format *format, const char *tuple,
-			const uint32_t *field_map, uint32_t fieldno,
+			const uint8_t *field_map, uint32_t fieldno,
 			const char *path, uint32_t path_len,
-			int32_t *offset_slot_hint, int multikey_idx)
+			int32_t *offset_slot_hint, int multikey_idx,
+			bool is_tiny)
 {
 	int32_t offset_slot;
 	if (offset_slot_hint != NULL &&
@@ -661,7 +853,7 @@ tuple_field_raw_by_path(struct tuple_format *format, const char *tuple,
 offset_slot_access:
 		/* Indexed field */
 		offset = field_map_get_offset(field_map, offset_slot,
-					      multikey_idx);
+					      multikey_idx, is_tiny);
 		if (offset == 0)
 			return NULL;
 		tuple += offset;
@@ -695,7 +887,7 @@ parse:
  */
 static inline const char *
 tuple_field_raw(struct tuple_format *format, const char *tuple,
-		const uint32_t *field_map, uint32_t field_no)
+		const uint8_t *field_map, uint32_t field_no, bool is_tiny)
 {
 	if (likely(field_no < format->index_field_count)) {
 		int32_t offset_slot;
@@ -711,7 +903,7 @@ tuple_field_raw(struct tuple_format *format, const char *tuple,
 		if (offset_slot == TUPLE_OFFSET_SLOT_NIL)
 			goto parse;
 		offset = field_map_get_offset(field_map, offset_slot,
-					      MULTIKEY_NONE);
+					      MULTIKEY_NONE, is_tiny);
 		if (offset == 0)
 			return NULL;
 		tuple += offset;
@@ -739,7 +931,8 @@ static inline const char *
 tuple_field(struct tuple *tuple, uint32_t fieldno)
 {
 	return tuple_field_raw(tuple_format(tuple), tuple_data(tuple),
-			       tuple_field_map(tuple), fieldno);
+			       tuple_field_map(tuple), fieldno,
+			       tuple_is_tiny(tuple));
 }
 
 /**
@@ -759,8 +952,9 @@ tuple_field(struct tuple *tuple, uint32_t fieldno)
  */
 const char *
 tuple_field_raw_by_full_path(struct tuple_format *format, const char *tuple,
-			     const uint32_t *field_map, const char *path,
-			     uint32_t path_len, uint32_t path_hash);
+			     const uint8_t *field_map, const char *path,
+			     uint32_t path_len, uint32_t path_hash,
+			     bool is_tiny);
 
 /**
  * Get a tuple field pointed to by an index part and multikey
@@ -774,8 +968,8 @@ tuple_field_raw_by_full_path(struct tuple_format *format, const char *tuple,
  */
 static inline const char *
 tuple_field_raw_by_part(struct tuple_format *format, const char *data,
-			const uint32_t *field_map,
-			struct key_part *part, int multikey_idx)
+			const uint8_t *field_map,
+			struct key_part *part, int multikey_idx, bool is_tiny)
 {
 	if (unlikely(part->format_epoch != format->epoch)) {
 		assert(format->epoch != 0);
@@ -788,7 +982,8 @@ tuple_field_raw_by_part(struct tuple_format *format, const char *data,
 	}
 	return tuple_field_raw_by_path(format, data, field_map, part->fieldno,
 				       part->path, part->path_len,
-				       &part->offset_slot_cache, multikey_idx);
+				       &part->offset_slot_cache, multikey_idx,
+				       is_tiny);
 }
 
 /**
@@ -804,7 +999,7 @@ tuple_field_by_part(struct tuple *tuple, struct key_part *part,
 {
 	return tuple_field_raw_by_part(tuple_format(tuple), tuple_data(tuple),
 				       tuple_field_map(tuple), part,
-				       multikey_idx);
+				       multikey_idx, tuple_is_tiny(tuple));
 }
 
 /**
@@ -818,7 +1013,8 @@ tuple_field_by_part(struct tuple *tuple, struct key_part *part,
  */
 uint32_t
 tuple_raw_multikey_count(struct tuple_format *format, const char *data,
-			 const uint32_t *field_map, struct key_def *key_def);
+			 const uint8_t *field_map, struct key_def *key_def,
+			 bool is_tiny);
 
 /**
  * Get count of multikey index keys in tuple by given multikey
@@ -831,7 +1027,8 @@ static inline uint32_t
 tuple_multikey_count(struct tuple *tuple, struct key_def *key_def)
 {
 	return tuple_raw_multikey_count(tuple_format(tuple), tuple_data(tuple),
-					tuple_field_map(tuple), key_def);
+					tuple_field_map(tuple), key_def,
+					tuple_is_tiny(tuple));
 }
 
 /**
@@ -1144,7 +1341,7 @@ tuple_unref(struct tuple *tuple)
 	if (unlikely(tuple->is_bigref))
 		tuple_unref_slow(tuple);
 	else if (--tuple->refs == 0) {
-		assert(!tuple->is_dirty);
+		assert(!tuple_is_dirty(tuple));
 		tuple_delete(tuple);
 	}
 }
