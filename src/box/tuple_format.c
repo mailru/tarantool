@@ -492,7 +492,7 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 	       || json_token_is_multikey(&tuple_format_field(format, 0)->token));
 	size_t field_map_size = -current_slot * sizeof(uint32_t);
 	if (field_map_size > INT16_MAX) {
-		/** tuple->data_offset is 15 bits */
+		/** tuple data_offset can't be more than 15 bits */
 		diag_set(ClientError, ER_INDEX_FIELD_COUNT_LIMIT,
 			 -current_slot);
 		return -1;
@@ -869,7 +869,8 @@ tuple_format_required_fields_validate(struct tuple_format *format,
 
 static int
 tuple_field_map_create_plain(struct tuple_format *format, const char *tuple,
-			     bool validate, struct field_map_builder *builder)
+			     bool validate, struct field_map_builder *builder,
+			     bool *is_tiny)
 {
 	struct region *region = &fiber()->gc;
 	const char *pos = tuple;
@@ -917,7 +918,7 @@ tuple_field_map_create_plain(struct tuple_format *format, const char *tuple,
 		if (field->offset_slot != TUPLE_OFFSET_SLOT_NIL &&
 		    field_map_builder_set_slot(builder, field->offset_slot,
 					       pos - tuple, MULTIKEY_NONE,
-					       0, NULL) != 0) {
+					       0, NULL, is_tiny) != 0) {
 			return -1;
 		}
 	}
@@ -933,7 +934,8 @@ end:
 /** @sa declaration for details. */
 int
 tuple_field_map_create(struct tuple_format *format, const char *tuple,
-		       bool validate, struct field_map_builder *builder)
+		       bool validate, struct field_map_builder *builder,
+		       bool *is_tiny)
 {
 	struct region *region = &fiber()->gc;
 	if (field_map_builder_create(builder, format->field_map_size,
@@ -948,7 +950,7 @@ tuple_field_map_create(struct tuple_format *format, const char *tuple,
 	 */
 	if (format->fields_depth == 1) {
 		return tuple_field_map_create_plain(format, tuple, validate,
-						    builder);
+						    builder, is_tiny);
 	}
 
 	uint32_t field_count;
@@ -965,7 +967,8 @@ tuple_field_map_create(struct tuple_format *format, const char *tuple,
 		if (entry.field->offset_slot != TUPLE_OFFSET_SLOT_NIL &&
 		    field_map_builder_set_slot(builder, entry.field->offset_slot,
 					entry.data - tuple, entry.multikey_idx,
-					entry.multikey_count, region) != 0)
+					entry.multikey_count, region,
+					is_tiny) != 0)
 			return -1;
 	}
 	return entry.data == NULL ? 0 : -1;
