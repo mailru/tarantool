@@ -151,6 +151,11 @@ struct iproto_thread {
 	 * Iproto binary listener
 	 */
 	struct evio_service binary;
+	/**
+	 * Flag, indicates, that this thread has it's
+	 * own listening properties
+	 */
+	bool is_listening_sepatate;
 };
 
 static struct iproto_thread *iproto_threads;
@@ -2272,6 +2277,7 @@ iproto_init(int threads_count)
 	for (int i = 0; i < threads_count; i++, iproto_threads_count++) {
 		struct iproto_thread *iproto_thread = &iproto_threads[i];
 		iproto_thread->id = i;
+		iproto_thread->is_listening_sepatate = false;
 		if (iproto_thread_init(iproto_thread) != 0)
 			goto fail;
 
@@ -2305,6 +2311,11 @@ fail:
 enum iproto_cfg_op {
 	/** Command code to set max input for iproto thread */
 	IPROTO_CFG_MSG_MAX,
+	/**
+	 * Command code to bind socket in specified
+	 * iproto thread
+	 */
+	IPROTO_CFG_BIND_AND_LISTEN,
 	/**
 	 * Command code to start listen socket contained
 	 * in evio_service object
@@ -2340,6 +2351,7 @@ struct iproto_cfg_msg: public cbus_call_msg
 			size_t connections;
 			size_t requests;
 		};
+		const char *uri;
 		/** Pointer to evio_service, used for bind */
 		struct evio_service *binary;
 
@@ -2397,6 +2409,14 @@ iproto_do_cfg_f(struct cbus_call_msg *m)
 			if (old < iproto_msg_max)
 				iproto_resume(iproto_thread);
 			break;
+		case IPROTO_CFG_BIND_AND_LISTEN:
+			assert(cfg_msg->uri != NULL);
+			if (evio_service_bind(&iproto_thread->binary,
+					      cfg_msg->uri) != 0)
+				diag_raise();
+			if (evio_service_listen(&iproto_thread->binary) != 0)
+				diag_raise();
+			break;
 		case IPROTO_CFG_LISTEN:
 			if (evio_service_is_active(&iproto_thread->binary)) {
 				diag_set(ClientError, ER_UNSUPPORTED, "Iproto",
@@ -2439,7 +2459,8 @@ iproto_send_stop_msg(void)
 	struct iproto_cfg_msg cfg_msg;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STOP);
 	for (int i = 0; i < iproto_threads_count; i++)
-		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
+		if (! iproto_threads[i].is_listening_sepatate)
+			iproto_do_cfg(&iproto_threads[i], &cfg_msg);
 }
 
 static inline void
@@ -2449,7 +2470,8 @@ iproto_send_listen_msg(struct evio_service *binary)
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_LISTEN);
 	cfg_msg.binary = binary;
 	for (int i = 0; i < iproto_threads_count; i++)
-		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
+		if (! iproto_threads[i].is_listening_sepatate)
+			iproto_do_cfg(&iproto_threads[i], &cfg_msg);
 }
 
 void
@@ -2473,6 +2495,24 @@ iproto_listen(const char *uri)
 
 	iproto_bound_address_storage = binary.addrstorage;
 	iproto_bound_address_len = binary.addr_len;
+}
+
+void
+iproto_listen(const char *uri, int64_t idx)
+{
+	struct evio_service binary;
+	struct iproto_cfg_msg cfg_msg;
+
+	assert(idx >= 0 && idx < iproto_threads_count);
+	memset(&binary, 0, sizeof(binary));
+	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STOP);
+	iproto_do_cfg(&iproto_threads[idx], &cfg_msg);
+	if (uri != NULL) {
+		iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_BIND_AND_LISTEN);
+		cfg_msg.uri = uri;
+		iproto_do_cfg(&iproto_threads[idx], &cfg_msg);
+		iproto_threads[idx].is_listening_sepatate = true;
+	}
 }
 
 size_t
@@ -2603,4 +2643,10 @@ iproto_rmean_foreach(void *cb, void *cb_ctx)
 			return rc;
 	}
 	return 0;
+}
+
+bool
+iproto_check_thread_idx(int64_t idx)
+{
+	return (idx >= 0 && idx < iproto_threads_count ? true : false);
 }

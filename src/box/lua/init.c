@@ -57,6 +57,7 @@
 #include "box/lua/ctl.h"
 #include "box/lua/session.h"
 #include "box/lua/net_box.h"
+#include "box/lua/iproto_thread.h"
 #include "box/lua/cfg.h"
 #include "box/lua/xlog.h"
 #include "box/lua/console.h"
@@ -80,6 +81,7 @@ extern char session_lua[],
 	feedback_daemon_lua[],
 #endif
 	net_box_lua[],
+	iproto_thread_lua[],
 	upgrade_lua[],
 	console_lua[],
 	merger_lua[];
@@ -98,6 +100,7 @@ static const char *lua_sources[] = {
 #endif
 	"box/upgrade", upgrade_lua,
 	"box/net_box", net_box_lua,
+	"box/iproto_thread", iproto_thread_lua,
 	"box/console", console_lua,
 	"box/load_cfg", load_cfg_lua,
 	"box/xlog", xlog_lua,
@@ -479,6 +482,8 @@ box_lua_init(struct lua_State *L)
 	box_lua_xlog_init(L);
 	box_lua_sql_init(L);
 	luaopen_net_box(L);
+	lua_pop(L, 1);
+	luaopen_iproto_thread(L);
 	lua_pop(L, 1);
 	tarantool_lua_console_init(L);
 	lua_pop(L, 1);

@@ -32,6 +32,7 @@
  */
 
 #include <stddef.h>
+#include <stdint.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -104,6 +105,12 @@ iproto_set_msg_max(int iproto_msg_max);
 
 void
 iproto_free(void);
+
+bool
+iproto_check_thread_idx(int64_t idx);
+
+void
+iproto_listen(const char *uri, int64_t idx);
 
 #endif /* defined(__cplusplus) */
 

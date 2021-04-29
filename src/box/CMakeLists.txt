@@ -15,6 +15,7 @@ if (ENABLE_FEEDBACK_DAEMON)
     lua_source(lua_sources lua/feedback_daemon.lua)
 endif()
 lua_source(lua_sources lua/net_box.lua)
+lua_source(lua_sources lua/iproto_thread.lua)
 lua_source(lua_sources lua/upgrade.lua)
 lua_source(lua_sources lua/console.lua)
 lua_source(lua_sources lua/xlog.lua)
@@ -211,6 +212,7 @@ add_library(box STATIC
     lua/error.cc
     lua/session.c
     lua/net_box.c
+    lua/iproto_thread.cc
     lua/xlog.c
     lua/execute.c
     lua/key_def.c
