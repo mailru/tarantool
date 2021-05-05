@@ -2429,41 +2429,47 @@ iproto_do_cfg_f(struct cbus_call_msg *m)
 	return 0;
 }
 
-static inline void
+static inline int
 iproto_do_cfg(struct iproto_thread *iproto_thread, struct iproto_cfg_msg *msg)
 {
 	msg->iproto_thread = iproto_thread;
 	if (cbus_call(&iproto_thread->net_pipe, &iproto_thread->tx_pipe, msg,
 		      iproto_do_cfg_f, NULL, TIMEOUT_INFINITY) != 0)
-		diag_raise();
+		return -1;
+	return 0;
 }
 
-static inline void
+static inline int
 iproto_send_stop_msg(void)
 {
 	struct iproto_cfg_msg cfg_msg;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STOP);
 	for (int i = 0; i < iproto_threads_count; i++)
-		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
+		if (iproto_do_cfg(&iproto_threads[i], &cfg_msg) != 0)
+			return -1;
+	return 0;
 }
 
-static inline void
+static inline int
 iproto_send_listen_msg(struct evio_service *binary)
 {
 	struct iproto_cfg_msg cfg_msg;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_LISTEN);
 	cfg_msg.binary = binary;
 	for (int i = 0; i < iproto_threads_count; i++)
-		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
+		if (iproto_do_cfg(&iproto_threads[i], &cfg_msg) != 0)
+			return -1;
+	return 0;
 }
 
-void
+int
 iproto_listen(const char *uri)
 {
 	if (evio_service_is_active(&binary))
 		evio_service_stop(&binary);
 
-	iproto_send_stop_msg();
+	if (iproto_send_stop_msg() != 0)
+		return -1;
 	memset(&binary, 0, sizeof(binary));
 	if (uri != NULL) {
 		/*
@@ -2473,12 +2479,14 @@ iproto_listen(const char *uri)
 		 * incoming connections across iproto threads.
 		 */
 		if (evio_service_bind(&binary, uri) != 0)
-			diag_raise();
-		iproto_send_listen_msg(&binary);
+			return -1;
+		if (iproto_send_listen_msg(&binary) != 0)
+			return -1;
 	}
 
 	iproto_bound_address_storage = binary.addrstorage;
 	iproto_bound_address_len = binary.addr_len;
+	return 0;
 }
 
 size_t
