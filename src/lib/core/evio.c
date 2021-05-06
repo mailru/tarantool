@@ -420,3 +420,15 @@ evio_service_stop(struct evio_service *service)
 		}
 	}
 }
+
+void
+evio_service_deactivate(struct evio_service *service)
+{
+	say_info("%s: deactivated", evio_service_name(service));
+
+	if (ev_is_active(&service->ev)) {
+		ev_io_stop(service->loop, &service->ev);
+		service->addr_len = 0;
+	}
+	ev_io_set(&service->ev, -1, 0);
+}

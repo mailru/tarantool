@@ -2064,8 +2064,12 @@ net_cord_f(va_list  ap)
 	 * will take care of creating events for incoming
 	 * connections.
 	 */
-	if (evio_service_is_active(&iproto_thread->binary))
-		evio_service_stop(&iproto_thread->binary);
+	if (evio_service_is_active(&iproto_thread->binary)) {
+		if (iproto_thread->id == 0)
+			evio_service_stop(&iproto_thread->binary);
+		else
+			evio_service_deactivate(&iproto_thread->binary);
+	}
 
 	return 0;
 }
@@ -2318,6 +2322,13 @@ enum iproto_cfg_op {
 	 */
 	IPROTO_CFG_STOP,
 	/**
+	 * Same as previous, but without closing socket. We
+	 * don't have to close socket for all threads, except
+	 * thread with id == 0, because all threads listen same
+	 * socket!
+	 */
+	IPROTO_CFG_DEACTIVATE,
+	/**
 	 * Command code do get statistic from iproto thread
 	 */
 	IPROTO_CFG_STAT,
@@ -2411,6 +2422,10 @@ iproto_do_cfg_f(struct cbus_call_msg *m)
 			if (evio_service_is_active(&iproto_thread->binary))
 				evio_service_stop(&iproto_thread->binary);
 			break;
+		case IPROTO_CFG_DEACTIVATE:
+			if (evio_service_is_active(&iproto_thread->binary))
+				evio_service_deactivate(&iproto_thread->binary);
+			break;
 		case IPROTO_CFG_STAT:
 			iproto_fill_stat(iproto_thread, cfg_msg);
 			break;
@@ -2438,7 +2453,10 @@ iproto_send_stop_msg(void)
 {
 	struct iproto_cfg_msg cfg_msg;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_STOP);
-	for (int i = 0; i < iproto_threads_count; i++)
+	iproto_do_cfg(&iproto_threads[0], &cfg_msg);
+	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_DEACTIVATE);
+
+	for (int i = 1; i < iproto_threads_count; i++)
 		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
 }
 
@@ -2574,7 +2592,7 @@ iproto_free(void)
 		 * failing to bind in case it tries to bind before socket
 		 * is closed by OS.
 		 */
-		if (evio_service_is_active(&iproto_threads[i].binary))
+		if (evio_service_is_active(&iproto_threads[i].binary) && i == 0)
 			close(iproto_threads[i].binary.ev.fd);
 
 		rmean_delete(iproto_threads[i].rmean);

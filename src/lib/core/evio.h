@@ -121,6 +121,10 @@ evio_service_listen(struct evio_service *service);
 void
 evio_service_stop(struct evio_service *service);
 
+/** If started, stop event flow, without closing the acceptor socket */
+void
+evio_service_deactivate(struct evio_service *service);
+
 int
 evio_socket(struct ev_io *coio, int domain, int type, int protocol);
 
