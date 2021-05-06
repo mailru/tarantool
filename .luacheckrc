@@ -82,6 +82,12 @@ files["test/box/gh-5645-several-iproto-threads.lua"] = {
         "ping",
     },
 }
+files["test/box/gh-5928-several-listen-sockets.lua"] = {
+    globals = {
+        "prepare_table_with_fail_listen_uri",
+        "get_corresponding_error",
+    },
+}
 files["test/box-tap/session.test.lua"] = {
     globals = {
         "session",

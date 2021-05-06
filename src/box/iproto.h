@@ -54,6 +54,11 @@ enum {
 	IPROTO_FIBER_POOL_SIZE_FACTOR = 5,
 };
 
+enum {
+	/** Maximum count of listening sockets */
+	IPROTO_LISTEN_SOCKET_MAX = 20
+};
+
 extern unsigned iproto_readahead;
 
 /**
@@ -97,7 +102,10 @@ void
 iproto_init(int threads_count);
 
 int
-iproto_listen(const char *uri);
+iproto_listen(const char **uri_array, unsigned size);
+
+int
+iproto_stop_listen(void);
 
 void
 iproto_set_msg_max(int iproto_msg_max);

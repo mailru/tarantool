@@ -150,12 +150,17 @@ struct iproto_thread {
 	/*
 	 * Iproto binary listener
 	 */
-	struct evio_service binary;
+	struct evio_service binaries[IPROTO_LISTEN_SOCKET_MAX];
+	/*
+	 * Count of currently used binaries;
+	 */
+	unsigned binaries_count;
 };
 
 static struct iproto_thread *iproto_threads;
 static int iproto_threads_count;
-static struct evio_service binary;
+static struct evio_service binaries[IPROTO_LISTEN_SOCKET_MAX];
+static unsigned binaries_count;
 
 /**
  * In Greek mythology, Kharon is the ferryman who carries souls
@@ -199,22 +204,28 @@ unsigned iproto_readahead = 16320;
 /* The maximal number of iproto messages in fly. */
 static int iproto_msg_max = IPROTO_MSG_MAX_MIN;
 
-/**
- * Address the iproto listens for, stored in TX
- * thread. Is kept in TX to be shown in box.info.
- */
-static struct sockaddr_storage iproto_bound_address_storage;
-/** 0 means that no address is listened. */
-static socklen_t iproto_bound_address_len;
+static int
+iproto_fill_bound_address(char *buf, unsigned idx)
+{
+	return sio_addr_snprintf(buf, SERVICE_NAME_MAXLEN,
+				 (struct sockaddr *) &binaries[idx].addrstorage,
+				 binaries[idx].addr_len);
+}
 
 const char *
 iproto_bound_address(char *buf)
 {
-	if (iproto_bound_address_len == 0)
+	if (binaries_count == 0)
 		return NULL;
-	sio_addr_snprintf(buf, SERVICE_NAME_MAXLEN,
-			  (struct sockaddr *) &iproto_bound_address_storage,
-			  iproto_bound_address_len);
+	assert(binaries_count <= IPROTO_LISTEN_SOCKET_MAX);
+	int rc = 0;
+	char *p = buf;
+	unsigned max = (SERVICE_NAME_MAXLEN + 2) * IPROTO_LISTEN_SOCKET_MAX;
+	for (unsigned i = 0; i < binaries_count; i++) {
+		rc += iproto_fill_bound_address(p + rc, i);
+		if (i != binaries_count - 1)
+			rc += snprintf(p + rc, max - rc, ", ");
+	}
 	return buf;
 }
 
@@ -2026,6 +2037,9 @@ iproto_on_accept(struct evio_service *service, int fd,
 	return 0;
 }
 
+static inline void
+iproto_thread_deactivate_binaries(struct iproto_thread *iproto_thread);
+
 /**
  * The network io thread main function:
  * begin serving the message bus.
@@ -2041,8 +2055,12 @@ net_cord_f(va_list  ap)
 	mempool_create(&iproto_thread->iproto_connection_pool, &cord()->slabc,
 		       sizeof(struct iproto_connection));
 
-	evio_service_init(loop(), &iproto_thread->binary, "binary",
-			  iproto_on_accept, iproto_thread);
+	for (unsigned i = 0; i < IPROTO_LISTEN_SOCKET_MAX; i++) {
+		evio_service_init(loop(), &iproto_thread->binaries[i],
+				  "binary", iproto_on_accept,
+				  iproto_thread);
+	}
+	iproto_thread->binaries_count = 0;
 
 	char endpoint_name[ENDPOINT_NAME_MAX];
 	snprintf(endpoint_name, ENDPOINT_NAME_MAX, "net%u",
@@ -2065,11 +2083,7 @@ net_cord_f(va_list  ap)
 	 * will take care of creating events for incoming
 	 * connections.
 	 */
-	if (evio_service_is_active(&iproto_thread->binary)) {
-		evio_service_deactivate(&iproto_thread->binary);
-		ev_io_set(&iproto_thread->binary.ev, -1, 0);
-	}
-
+	iproto_thread_deactivate_binaries(iproto_thread);
 	return 0;
 }
 
@@ -2262,7 +2276,9 @@ iproto_init(int threads_count)
 		/* .fd = */ iproto_session_fd,
 		/* .sync = */ iproto_session_sync,
 	};
-	ev_io_set(&binary.ev, -1, 0);
+	for (unsigned i = 0; i < IPROTO_LISTEN_SOCKET_MAX; i++)
+		ev_io_set(&binaries[i].ev, -1, 0);
+	binaries_count = 0;
 
 	iproto_threads = (struct iproto_thread *)
 		calloc(threads_count, sizeof(struct iproto_thread));
@@ -2343,8 +2359,12 @@ struct iproto_cfg_msg: public cbus_call_msg
 			size_t connections;
 			size_t requests;
 		};
-		/** Pointer to evio_service, used for bind */
-		struct evio_service *binary;
+		struct {
+			/** Pointer to evio_services, used for bind */
+			struct evio_service *binaries[IPROTO_LISTEN_SOCKET_MAX];
+			/** Real binaries count */
+			unsigned binaries_count;
+		};
 
 		/** New iproto max message count. */
 		int iproto_msg_max;
@@ -2353,14 +2373,21 @@ struct iproto_cfg_msg: public cbus_call_msg
 };
 
 static inline void
-iproto_thread_fill_binary(struct iproto_thread *iproto_thread,
-			  struct evio_service *binary)
+iproto_thread_fill_binaries(struct iproto_thread *iproto_thread,
+			    struct evio_service **binaries,
+			    unsigned binaries_count)
 {
-	strcpy(iproto_thread->binary.host, binary->host);
-	strcpy(iproto_thread->binary.serv, binary->serv);
-	iproto_thread->binary.addrstorage = binary->addrstorage;
-	iproto_thread->binary.addr_len = binary->addr_len;
-	ev_io_set(&iproto_thread->binary.ev, binary->ev.fd, EV_READ);
+	assert(binaries_count <= IPROTO_LISTEN_SOCKET_MAX);
+	for (unsigned i = 0; i < binaries_count; i++) {
+		strcpy(iproto_thread->binaries[i].host, binaries[i]->host);
+		strcpy(iproto_thread->binaries[i].serv, binaries[i]->serv);
+		iproto_thread->binaries[i].addrstorage =
+			binaries[i]->addrstorage;
+		iproto_thread->binaries[i].addr_len = binaries[i]->addr_len;
+		ev_io_set(&iproto_thread->binaries[i].ev,
+			  binaries[i]->ev.fd, EV_READ);
+	}
+	iproto_thread->binaries_count = binaries_count;
 }
 
 static inline void
@@ -2383,6 +2410,39 @@ iproto_fill_stat(struct iproto_thread *iproto_thread,
 		mempool_count(&iproto_thread->iproto_msg_pool);
 }
 
+static inline void
+iproto_thread_deactivate_binaries(struct iproto_thread *iproto_thread)
+{
+	for (unsigned i = 0; i < iproto_thread->binaries_count; i++) {
+		if (evio_service_is_active(&iproto_thread->binaries[i])) {
+			evio_service_deactivate(&iproto_thread->binaries[i]);
+			ev_io_set(&iproto_thread->binaries[i].ev, -1, 0);
+		}
+	}
+	iproto_threads->binaries_count = 0;
+}
+
+static inline void
+iproto_thread_check_listen_binaries(struct iproto_thread *iproto_thread)
+{
+	for (unsigned i = 0; i < iproto_thread->binaries_count; i++) {
+		if (evio_service_is_active(&iproto_thread->binaries[i])) {
+			diag_set(ClientError, ER_UNSUPPORTED, "Iproto",
+				 "listen if service already active");
+			diag_raise();
+		}
+	}
+}
+
+static inline void
+iproto_thread_start_listen_binaries(struct iproto_thread *iproto_thread)
+{
+	for (unsigned i = 0; i < iproto_thread->binaries_count; i++) {
+		if (evio_service_listen(&iproto_thread->binaries[i]) != 0)
+			diag_raise();
+	}
+}
+
 static int
 iproto_do_cfg_f(struct cbus_call_msg *m)
 {
@@ -2401,20 +2461,14 @@ iproto_do_cfg_f(struct cbus_call_msg *m)
 				iproto_resume(iproto_thread);
 			break;
 		case IPROTO_CFG_LISTEN:
-			if (evio_service_is_active(&iproto_thread->binary)) {
-				diag_set(ClientError, ER_UNSUPPORTED, "Iproto",
-					 "listen if service already active");
-				diag_raise();
-			}
-			iproto_thread_fill_binary(iproto_thread, cfg_msg->binary);
-			if (evio_service_listen(&iproto_thread->binary) != 0)
-				diag_raise();
+			iproto_thread_check_listen_binaries(iproto_thread);
+			iproto_thread_fill_binaries(iproto_thread,
+						    cfg_msg->binaries,
+						    cfg_msg->binaries_count);
+			iproto_thread_start_listen_binaries(iproto_thread);
 			break;
 		case IPROTO_CFG_STOP:
-			if (evio_service_is_active(&iproto_thread->binary)) {
-				evio_service_deactivate(&iproto_thread->binary);
-				ev_io_set(&iproto_thread->binary.ev, -1, 0);
-			}
+			iproto_thread_deactivate_binaries(iproto_thread);
 			break;
 		case IPROTO_CFG_STAT:
 			iproto_fill_stat(iproto_thread, cfg_msg);
@@ -2451,11 +2505,14 @@ iproto_send_stop_msg(void)
 }
 
 static inline int
-iproto_send_listen_msg(struct evio_service *binary)
+iproto_send_listen_msg(struct evio_service *binaries, unsigned binaries_count)
 {
 	struct iproto_cfg_msg cfg_msg;
 	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_LISTEN);
-	cfg_msg.binary = binary;
+	assert(binaries_count <= IPROTO_LISTEN_SOCKET_MAX);
+	for (unsigned i = 0; i < binaries_count; i++)
+		cfg_msg.binaries[i] = &binaries[i];
+	cfg_msg.binaries_count = binaries_count;
 	for (int i = 0; i < iproto_threads_count; i++)
 		if (iproto_do_cfg(&iproto_threads[i], &cfg_msg) != 0)
 			return -1;
@@ -2463,29 +2520,38 @@ iproto_send_listen_msg(struct evio_service *binary)
 }
 
 int
-iproto_listen(const char *uri)
+iproto_listen(const char **uri_array, unsigned size)
 {
-	if (evio_service_is_active(&binary))
-		evio_service_stop(&binary);
-
-	if (iproto_send_stop_msg() != 0)
+	assert(size != 0);
+	if (iproto_stop_listen() != 0)
 		return -1;
-	memset(&binary, 0, sizeof(binary));
-	if (uri != NULL) {
+
+	for (unsigned i = 0; i < size; i++) {
 		/*
 		 * Please note, we bind socket in main thread, and then
 		 * listen this socket in all iproto threads! With this
 		 * implementation, we rely on the Linux kernel to distribute
 		 * incoming connections across iproto threads.
 		 */
-		if (evio_service_bind(&binary, uri) != 0)
-			return -1;
-		if (iproto_send_listen_msg(&binary) != 0)
+		memset(&binaries[i], 0, sizeof(binaries[i]));
+		if (evio_service_bind(&binaries[i], uri_array[i]) != 0)
 			return -1;
 	}
+	iproto_send_listen_msg(binaries, size);
+	binaries_count = size;
+	return 0;
+}
 
-	iproto_bound_address_storage = binary.addrstorage;
-	iproto_bound_address_len = binary.addr_len;
+int
+iproto_stop_listen(void)
+{
+	for (unsigned i = 0; i < IPROTO_LISTEN_SOCKET_MAX; i++) {
+		if (evio_service_is_active(&binaries[i]))
+			evio_service_stop(&binaries[i]);
+	}
+	binaries_count = 0;
+	if (iproto_send_stop_msg() != 0)
+		return -1;
 	return 0;
 }
 
@@ -2580,8 +2646,10 @@ iproto_set_msg_max(int new_iproto_msg_max)
 void
 iproto_free(void)
 {
-	if (evio_service_is_active(&binary))
-		evio_service_stop(&binary);
+	for (unsigned i = 0; i < IPROTO_LISTEN_SOCKET_MAX; i++) {
+		if (evio_service_is_active(&binaries[i]))
+			evio_service_stop(&binaries[i]);
+	}
 
 	for (int i = 0; i < iproto_threads_count; i++) {
 		tt_pthread_cancel(iproto_threads[i].net_cord.id);
@@ -2591,10 +2659,7 @@ iproto_free(void)
 		 * failing to bind in case it tries to bind before socket
 		 * is closed by OS.
 		 */
-		if (evio_service_is_active(&iproto_threads[i].binary)) {
-			evio_service_deactivate(&iproto_threads[i].binary);
-			ev_io_set(&iproto_threads[i].binary.ev, -1, 0);
-		}
+		iproto_thread_deactivate_binaries(&iproto_threads[i]);
 
 		rmean_delete(iproto_threads[i].rmean);
 		slab_cache_destroy(&iproto_threads[i].net_slabc);

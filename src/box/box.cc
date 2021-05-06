@@ -681,6 +681,234 @@ box_check_uri(const char *source, const char *option_name)
 	return 0;
 }
 
+static int
+box_check_uri_option_val(const char *source, const char *option_name)
+{
+	if (source == NULL)
+		return 0;
+
+
+	char **option_val_array = NULL, *source_copy = NULL;
+	unsigned size = 0;
+	int rc = 0;
+
+	source_copy = strdup(source);
+	if (source_copy == NULL) {
+		diag_set(OutOfMemory, strlen(source) + 1,
+			 "strdup", "source");
+		rc = -1;
+		goto cleanup;
+	}
+	option_val_array = str_split(source_copy, ";", &size, false);
+	if (option_val_array == NULL) {
+		diag_set(OutOfMemory, size * sizeof(char *),
+			 "str_split", "option_val_array");
+		rc = -1;
+		goto cleanup;
+	}
+
+	for (unsigned i = 0; i < size; i++) {
+		if (!strcmp(option_name, "transport")) {
+			if (strcmp(option_val_array[i], "plain")) {
+				diag_set(ClientError, ER_CFG, option_name,
+					 "expected plain value for uri "
+					 "transport option");
+				rc = -1;
+				break;
+			}
+		} else {
+			diag_set(ClientError, ER_CFG, option_name,
+				 "unexpected option");
+				rc = -1;
+				break;
+		}
+	}
+
+cleanup:
+	if (option_val_array != NULL)
+		free(option_val_array);
+	if (source_copy != NULL)
+		free(source_copy);
+	return rc;
+}
+
+static int
+box_check_uri_option(const char *source, const char *option_name)
+{
+	if (source == NULL)
+		return 0;
+
+	char *source_copy = strdup(source);
+	if (source_copy == NULL) {
+		diag_set(OutOfMemory, strlen(source) + 1,
+			 "strdup", "source");
+		return -1;
+	}
+	int rc = 0;
+	char *opt_name = strtok(source_copy, "=");
+	char *opt_val = strtok(NULL, "=");
+	if (opt_name == NULL || opt_name != source_copy) {
+		diag_set(ClientError, ER_CFG, option_name,
+			 "expected uri?uri_option=uri_option_values");
+		rc = -1;
+		goto finish;
+	}
+	if (opt_val == NULL || strtok(NULL, "=") != NULL) {
+		diag_set(ClientError, ER_CFG, option_name,
+			 "expected uri?uri_option=uri_option_values");
+		rc = -1;
+		goto finish;
+	}
+	rc = box_check_uri_option_val(opt_val, opt_name);
+finish:
+	free(source_copy);
+	return rc;
+}
+
+static int
+box_check_uri_options(const char *source, const char *option_name)
+{
+	if (source == NULL)
+		return 0;
+
+	char **options_array = NULL, *source_copy = NULL;
+	unsigned size = 0;
+	int rc = 0;
+
+	source_copy = strdup(source);
+	if (source_copy == NULL) {
+		diag_set(OutOfMemory, strlen(source) + 1,
+			 "strdup", "source");
+		rc = -1;
+		goto cleanup;
+	}
+	options_array = str_split(source_copy, "&", &size, false);
+	if (options_array == NULL) {
+		if (size != 0) {
+			diag_set(OutOfMemory, size * sizeof(char *),
+				 "str_split", "options_array");
+		} else {
+			diag_set(ClientError, ER_CFG, option_name,
+				 "uri_options can not be empty "
+				 "in case they are set");
+		}
+		rc = -1;
+		goto cleanup;
+	}
+
+	for (unsigned i = 0; i < size; i++) {
+		rc = box_check_uri_option(options_array[i], option_name);
+		if (rc < 0)
+			break;
+	}
+
+cleanup:
+	if (options_array != NULL)
+		free(options_array);
+	if (source_copy != NULL)
+		free(source_copy);
+	return rc;
+}
+
+static int
+box_check_uri_ex(const char *source, const char *option_name)
+{
+	if (source == NULL)
+		return 0;
+
+	char *source_copy = strdup(source);
+	if (source_copy == NULL) {
+		diag_set(OutOfMemory, strlen(source) + 1,
+			 "strdup", "source");
+		return -1;
+	}
+
+	int rc = 0;
+	char *uri = strtok(source_copy, "?");
+	char *options = strtok(NULL, "?");
+	if (uri == NULL || uri != source_copy) {
+		diag_set(ClientError, ER_CFG, option_name,
+			 "uri can be empty, only if you pass it "
+			 "as one empty string");
+		rc = -1;
+		goto finish;
+	}
+	if (strtok(NULL, "?") != NULL) {
+		diag_set(ClientError, ER_CFG, option_name,
+			 "expected uri?uri_options");
+		rc = -1;
+		goto finish;
+	}
+	if ((rc = box_check_uri(uri, option_name)) < 0)
+		goto finish;
+	rc = box_check_uri_options(options, option_name);
+finish:
+	free(source_copy);
+	return rc;
+}
+
+static int
+box_check_several_uri(const char *source, const char *option_name,
+		      const char *delimiter)
+{
+	if (source == NULL || strlen(source) == 0) {
+		diag_set(ClientError, ER_CFG, option_name,
+			 "uri can be empty, only if you pass it "
+			 "as one empty string");
+		return -1;
+	}
+
+	char **uri_array = NULL, *source_copy = NULL;
+	unsigned size = 0;
+	int rc = 0;
+
+	source_copy = strdup(source);
+	if (source_copy == NULL) {
+		diag_set(OutOfMemory, strlen(source) + 1,
+			 "strdup", "source");
+		rc = -1;
+		goto cleanup;
+	}
+	uri_array = str_split(source_copy, delimiter, &size, false);
+	if (uri_array == NULL) {
+		if (size != 0) {
+			diag_set(OutOfMemory, size * sizeof(char *),
+				 "str_split", "uri_array");
+		} else {
+			diag_set(ClientError, ER_CFG, option_name,
+				 "uri can be empty, only if you pass it "
+				 "as one empty string");
+		}
+		rc = -1;
+		goto cleanup;
+	}
+
+	for (unsigned i = 0; i < size; i++) {
+		if ((rc = box_check_uri_ex(uri_array[i],
+					   option_name)) < 0)
+			break;
+	}
+
+cleanup:
+	if (uri_array != NULL)
+		free(uri_array);
+	if (source_copy != NULL)
+		free(source_copy);
+	return rc;
+}
+
+static int
+box_check_listen(void)
+{
+	int count = cfg_getarr_size("listen");
+	for (int i = 0; i < count; i++) {
+		const char *source = cfg_getarr_elem("listen", i);
+		if (box_check_several_uri(source, "listen", ", ") < 0)
+			return -1;
+	}
+	return 0;
+}
+
 static enum election_mode
 box_check_election_mode(void)
 {
@@ -1136,7 +1364,7 @@ box_check_config(void)
 {
 	struct tt_uuid uuid;
 	box_check_say();
-	if (box_check_uri(cfg_gets("listen"), "listen") < 0)
+	if (box_check_listen() < 0)
 		diag_raise();
 	box_check_instance_uuid(&uuid);
 	box_check_replicaset_uuid(&uuid);
@@ -1686,13 +1914,89 @@ promote:
 	return rc;
 }
 
+static void
+box_free_uri_array(char **uri_array, unsigned size)
+{
+	for (unsigned i = 0; i < size; i++)
+		free(uri_array[i]);
+	free(uri_array);
+}
+
 int
 box_listen(void)
 {
-	const char *uri = cfg_gets("listen");
-	if (box_check_uri(uri, "listen") != 0 || iproto_listen(uri) != 0)
+	if (box_check_listen() != 0)
 		return -1;
-	return 0;
+
+	char **uri_array = NULL;
+	char **tmp_uri_array = NULL;
+	unsigned uri_array_size = 0;
+	unsigned tmp_uri_array_size = 0;
+	int rc = 0;
+	int count = cfg_getarr_size("listen");
+	if (count == 0)
+		return iproto_stop_listen();
+
+	for (int i = 0; i < count; i++) {
+		const char *source = cfg_getarr_elem("listen", i);
+		char *source_copy = strdup(source);
+		if (source_copy == NULL) {
+			diag_set(OutOfMemory, strlen(source) + 1,
+				 "strdup", "source");
+			rc = -1;
+			goto cleanup;
+		}
+		tmp_uri_array = str_split(source_copy, ", ",
+					  &tmp_uri_array_size, true);
+		free(source_copy);
+		if (tmp_uri_array == NULL) {
+			diag_set(OutOfMemory, tmp_uri_array_size *
+				 sizeof(char *), "str_split",
+				 "tmp_uri_array");
+			rc = -1;
+			goto cleanup;
+		}
+		unsigned size = uri_array_size + tmp_uri_array_size;
+		char **tmp = (char **)realloc(uri_array, size * sizeof(char *));
+		if (tmp == NULL) {
+			diag_set(OutOfMemory, size * sizeof(char *),
+				 "str_split", "uri_array");
+			box_free_uri_array(tmp_uri_array, tmp_uri_array_size);
+			rc = -1;
+			goto cleanup;
+		}
+		uri_array = tmp;
+		for (unsigned i = 0; i < tmp_uri_array_size; i++)
+			uri_array[uri_array_size + i] = tmp_uri_array[i];
+		uri_array_size += tmp_uri_array_size;
+		free(tmp_uri_array);
+	}
+
+	/*
+	 * At the moment, we ignore every liten options,
+	 * later this behaviour can be changed.
+	 */
+	for (unsigned i = 0; i < uri_array_size; i++) {
+		char *uri_with_options = uri_array[i];
+		uri_array[i] = strtok(uri_array[i], "?");
+		/*
+		 * Invalid uri - uri can be empty only in case,
+		 * when it's the only one.
+		 */
+		if (uri_array[i] == NULL || uri_array[i] != uri_with_options) {
+			diag_set(ClientError, ER_CFG, "listen",
+				 "uri can be empty, only if you pass it "
+				 "as one empty string");
+			rc = -1;
+			goto cleanup;
+		}
+	}
+
+	rc = iproto_listen((const char **)uri_array, uri_array_size);
+cleanup:
+	if (uri_array != NULL)
+		box_free_uri_array(uri_array, uri_array_size);
+	return rc;
 }
 
 void

@@ -570,6 +570,41 @@ is_exp_of_two(unsigned n)
 	return (n & (n - 1)) == 0;
 }
 
+static inline char **
+str_split(char *str, const char *delimiter, unsigned *size, bool copy)
+{
+	char **tmp, **rc = NULL;
+	char *part = strtok((char *)str, delimiter);
+	*size = 0;
+
+	while (part != NULL) {
+		tmp = (char **)realloc(rc, ((++(*size)) * sizeof(char *)));
+		if (tmp == NULL)
+			goto error;
+
+		rc = tmp;
+		if (copy) {
+			rc[*size - 1] = strdup(part);
+			if (rc[*size - 1] == NULL) {
+				--(*size);
+				goto error;
+			}
+		} else {
+			rc[*size - 1] = part;
+		}
+		part = strtok(NULL, delimiter);
+	}
+	return rc;
+error:
+	if (rc != NULL) {
+		unsigned i;
+		for (i = 0; copy && i < *size; i++)
+			free(rc[i]);
+		free(rc);
+	}
+	return NULL;
+}
+
 /**
  * Put the current thread in sleep for the given number of
  * seconds.

@@ -142,7 +142,7 @@ local module_cfg_type = {
 -- forget to update it when add a new type or a combination of
 -- types here.
 local template_cfg = {
-    listen              = 'string, number',
+    listen              = 'string, number, table',
     memtx_memory        = 'number',
     strip_core          = 'boolean',
     memtx_min_tuple_size  = 'number',
@@ -215,6 +215,14 @@ local template_cfg = {
     sql_cache_size        = 'number',
 }
 
+local function str_split (inputstr, sep)
+    local t = {}
+    for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+        t[#t + 1] = str:gsub("^%s*(.-)%s*$", "%1")
+    end
+    return t
+end
+
 local function normalize_uri(port)
     if port == nil or type(port) == 'table' then
         return port
@@ -234,9 +242,97 @@ local function normalize_uri_list(port_list)
     return result
 end
 
+local function normalize_uri_option(port, name)
+    local value = ""
+    assert(type(port) == 'table')
+    for i = 1, #port do
+        value = value .. name .. "=" .. port[i]
+        if i ~= #port then
+            value = value .. "&"
+        end
+    end
+    return value
+end
+
+local function normalize_uri_with_options(port)
+    local value = port["uri"] or ""
+    value = value .. "?"
+    for key, val in pairs(port) do
+        if key ~= 'uri' then
+            if type(val) ~= 'table' then
+                val = str_split(val, ",")
+            end
+            value = value .. normalize_uri_option(val, key) .. "&"
+        end
+    end
+    return value:sub(1, -2);
+end
+
+-- Keys for uri table can be all digits or all strings, for
+-- example:
+-- listen = {'10.10.0.1:3301', '10.10.0.2:3302'} keys 1, 2
+-- listen = {{uri='10.10.0.1:3301', transport='plain'}} keys `uri`, `transport`
+-- listen = {{uri='10.10.0.1:3301', transport='plain'},
+--           '10.10.0.1:3301'} - keys 1, 2
+local function check_uri_table_keys(port_list)
+    local digit_keys = 0
+    local string_keys = 0
+    for key, _ in pairs(port_list) do
+        if type(key) == 'number' then
+            digit_keys = digit_keys + 1
+        elseif type(key) == 'string' then
+            string_keys = string_keys + 1
+        else
+            return false
+        end
+    end
+    if (digit_keys > 0 and string_keys > 0) or
+       (digit_keys == 0 and string_keys == 0) then
+        return false
+    end
+    return digit_keys > 0 and "digit_keys" or "string_keys"
+end
+
+-- listen option can be passed in multiple ways.
+-- listen = '10.10.0.1:3301'
+-- listen = {'10.10.0.1:3301'}
+-- listen = {'10.10.0.1:3301', '10.10.0.2:3302'}
+-- listen = {{uri='10.10.0.1:3301', transport='plain'}}
+-- listen = {'10.10.0.1:3301', {uri='10.10.0.2:3302', transport='plain'}}
+-- listen = {{uri='10.10.0.1:3301', transport='plain'},
+--           {uri='10.10.0.1:3313', transport='plain'}}
+-- listen = {uri='10.10.0.1:3301', transport={'plain', 'plain'}}
+-- listen = {uri='10.10.0.1:3301', transport='plain, plain'}
+-- listen = '10.10.0.1:3301, 10.10.0.1:3313'
+-- listen = '10.10.0.1:3301?transport=plain, 10.10.0.1:3313?transport=plain'
+-- listen = '10.10.0.1:3301?transport=plain&transport=plain'
+local function normalize_uri_with_options_list(port_list)
+     local result = {}
+     if type(port_list) == 'table' then
+        local key_type = check_uri_table_keys(port_list)
+        if not key_type then
+             box.error(box.error.CFG, 'listen', 'invalid input format')
+        end
+        if key_type == 'string_keys' then
+            table.insert(result, normalize_uri_with_options(port_list))
+        else
+            for _, port in pairs(port_list) do
+                if type(port) ~= 'table' then
+                    table.insert(result, normalize_uri(port))
+                else
+                    table.insert(result, normalize_uri_with_options(port))
+                end
+            end
+        end
+    else
+        return normalize_uri(port_list)
+    end
+    return result
+end
+
 -- options that require special handling
 local modify_cfg = {
-    listen             = normalize_uri,
+    listen             = normalize_uri_with_options_list,
     replication        = normalize_uri_list,
 }
 
