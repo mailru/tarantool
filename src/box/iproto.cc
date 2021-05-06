@@ -155,6 +155,7 @@ struct iproto_thread {
 
 static struct iproto_thread *iproto_threads;
 static int iproto_threads_count;
+static struct evio_service binary;
 
 /**
  * In Greek mythology, Kharon is the ferryman who carries souls
@@ -2064,8 +2065,10 @@ net_cord_f(va_list  ap)
 	 * will take care of creating events for incoming
 	 * connections.
 	 */
-	if (evio_service_is_active(&iproto_thread->binary))
-		evio_service_stop(&iproto_thread->binary);
+	if (evio_service_is_active(&iproto_thread->binary)) {
+		evio_service_deactivate(&iproto_thread->binary);
+		ev_io_set(&iproto_thread->binary.ev, -1, 0);
+	}
 
 	return 0;
 }
@@ -2259,7 +2262,7 @@ iproto_init(int threads_count)
 		/* .fd = */ iproto_session_fd,
 		/* .sync = */ iproto_session_sync,
 	};
-
+	ev_io_set(&binary.ev, -1, 0);
 
 	iproto_threads = (struct iproto_thread *)
 		calloc(threads_count, sizeof(struct iproto_thread));
@@ -2408,8 +2411,10 @@ iproto_do_cfg_f(struct cbus_call_msg *m)
 				diag_raise();
 			break;
 		case IPROTO_CFG_STOP:
-			if (evio_service_is_active(&iproto_thread->binary))
-				evio_service_stop(&iproto_thread->binary);
+			if (evio_service_is_active(&iproto_thread->binary)) {
+				evio_service_deactivate(&iproto_thread->binary);
+				ev_io_set(&iproto_thread->binary.ev, -1, 0);
+			}
 			break;
 		case IPROTO_CFG_STAT:
 			iproto_fill_stat(iproto_thread, cfg_msg);
@@ -2455,10 +2460,11 @@ iproto_send_listen_msg(struct evio_service *binary)
 void
 iproto_listen(const char *uri)
 {
-	struct evio_service binary;
-	memset(&binary, 0, sizeof(binary));
+	if (evio_service_is_active(&binary))
+		evio_service_stop(&binary);
 
 	iproto_send_stop_msg();
+	memset(&binary, 0, sizeof(binary));
 	if (uri != NULL) {
 		/*
 		 * Please note, we bind socket in main thread, and then
@@ -2566,6 +2572,9 @@ iproto_set_msg_max(int new_iproto_msg_max)
 void
 iproto_free(void)
 {
+	if (evio_service_is_active(&binary))
+		evio_service_stop(&binary);
+
 	for (int i = 0; i < iproto_threads_count; i++) {
 		tt_pthread_cancel(iproto_threads[i].net_cord.id);
 		tt_pthread_join(iproto_threads[i].net_cord.id, NULL);
@@ -2574,8 +2583,10 @@ iproto_free(void)
 		 * failing to bind in case it tries to bind before socket
 		 * is closed by OS.
 		 */
-		if (evio_service_is_active(&iproto_threads[i].binary))
-			close(iproto_threads[i].binary.ev.fd);
+		if (evio_service_is_active(&iproto_threads[i].binary)) {
+			evio_service_deactivate(&iproto_threads[i].binary);
+			ev_io_set(&iproto_threads[i].binary.ev, -1, 0);
+		}
 
 		rmean_delete(iproto_threads[i].rmean);
 		slab_cache_destroy(&iproto_threads[i].net_slabc);

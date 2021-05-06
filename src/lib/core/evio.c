@@ -405,18 +405,23 @@ evio_service_bind(struct evio_service *service, const char *uri)
 void
 evio_service_stop(struct evio_service *service)
 {
-	say_info("%s: stopped", evio_service_name(service));
-
-	if (ev_is_active(&service->ev)) {
-		ev_io_stop(service->loop, &service->ev);
-		service->addr_len = 0;
-	}
-
+	evio_service_deactivate(service);
 	if (service->ev.fd >= 0) {
 		close(service->ev.fd);
 		ev_io_set(&service->ev, -1, 0);
 		if (service->addr.sa_family == AF_UNIX) {
 			unlink(((struct sockaddr_un *) &service->addr)->sun_path);
 		}
+	}
+}
+
+void
+evio_service_deactivate(struct evio_service *service)
+{
+	say_info("%s: stopped", evio_service_name(service));
+
+	if (ev_is_active(&service->ev)) {
+		ev_io_stop(service->loop, &service->ev);
+		service->addr_len = 0;
 	}
 }
