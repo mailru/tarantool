@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include "strbuf.h"
-#include "small/ibuf.h"
+#include <ibuf.h>
 
 static void die(const char *fmt, ...)
 {
