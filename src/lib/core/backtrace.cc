@@ -46,6 +46,11 @@
 #ifdef ENABLE_BACKTRACE
 #include <libunwind.h>
 
+#ifdef TARGET_OS_DARWIN
+#include <execinfo.h>
+#include <dlfcn.h>
+#endif
+
 #include "small/region.h"
 #include "small/static.h"
 /*
@@ -131,7 +136,7 @@ error:
 }
 
 char *
-backtrace(char *start, size_t size)
+backtrace_to_buf(char *start, size_t size)
 {
 	int frame_no = 0;
 	unw_word_t sp = 0, old_sp = 0, ip, offset;
@@ -432,11 +437,101 @@ out:
 	free(demangle_buf);
 }
 
+/**
+ * Collect up to `limit' IP register values
+ * for frames of the current stack into `ip_buf'.
+ * Must be by far faster than usual backtrace according to the
+ * libunwind doc for unw_backtrace().
+ */
+void NOINLINE
+backtrace_collect_ip(void **ip_buf, int limit)
+{
+	memset(ip_buf, 0, limit * sizeof(*ip_buf));
+#ifndef TARGET_OS_DARWIN
+	unw_backtrace(ip_buf, limit);
+#else
+	backtrace(ip_buf, limit);
+#endif
+}
+
+/**
+ * Call `cb' callback for not more than
+ * first `limit' frames present in the `ip_buf'.
+ *
+ * The implementation uses poorly documented `get_proc_name' callback
+ * from the `unw_accessors_t' to get procedure names via `ip_buf' values.
+ * Although `get_proc_name' is present on most architectures, it's an optional
+ * field, so procedure name is allowed to be absent (NULL) in `cb' call.
+ *
+ * TODO: to add cache and demangling support
+ */
+void
+backtrace_foreach_ip(backtrace_cb cb, void **ip_buf, int limit,
+		     void *cb_ctx)
+{
+#ifndef TARGET_OS_DARWIN
+	char proc_name[BACKTRACE_NAME_MAX];
+	unw_word_t ip = 0, offset = 0;
+	unw_proc_info_t pi;
+	int frame_no, ret = 0;
+	char *proc = NULL;
+
+	unw_accessors_t *acc = unw_get_accessors(unw_local_addr_space);
+
+	/*
+	 * RIPs collecting comes from inside a helper routine
+	 * so we skip the collector function address itself thus
+	 * start fetching functions with frame number = 1.
+	 */
+	for (frame_no = 1; frame_no < limit && ip_buf[frame_no] != NULL;
+	     frame_no++) {
+		ip = (unw_word_t)ip_buf[frame_no];
+
+		if (acc->get_proc_name == NULL) {
+			ret = unw_get_proc_info_by_ip(unw_local_addr_space,
+						      ip, &pi, NULL);
+			offset = ip - pi.start_ip;
+		} else {
+			ret = acc->get_proc_name(unw_local_addr_space, ip,
+						 proc_name, sizeof(proc_name),
+						 &offset, NULL);
+			proc = proc_name;
+		}
+		if (ret != 0 || cb(frame_no - 1, (void *)ip, proc,
+				   (size_t)offset, cb_ctx) != 0)
+			break;
+	}
+
+	if (ret != 0)
+		say_debug("unwinding error: %s", unw_strerror(ret));
+#else
+	int frame_no, ret = 1;
+	void *ip = NULL;
+	size_t offset = 0;
+	Dl_info dli;
+
+	for (frame_no = 1; frame_no < limit && ip_buf[frame_no] != NULL;
+	     ++frame_no) {
+		ip = ip_buf[frame_no];
+		ret = dladdr(ip, &dli);
+		if (ret == 0)
+			break;
+		offset = (char *)ip - (char *)dli.dli_saddr;
+
+		if (cb(frame_no - 1, ip, dli.dli_sname, offset, cb_ctx) != 0)
+			break;
+	}
+
+	if (ret == 0)
+		say_debug("unwinding error: %i", ret);
+#endif
+}
+
 void
 print_backtrace(void)
 {
 	char *start = (char *)static_alloc(SMALL_STATIC_SIZE);
-	fdprintf(STDERR_FILENO, "%s", backtrace(start, SMALL_STATIC_SIZE));
+	fdprintf(STDERR_FILENO, "%s", backtrace_to_buf(start, SMALL_STATIC_SIZE));
 }
 #endif /* ENABLE_BACKTRACE */
 
