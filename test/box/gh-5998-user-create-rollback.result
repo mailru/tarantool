@@ -1,0 +1,76 @@
+-- test-run result file version 2
+env = require('test_run')
+ | ---
+ | ...
+test_run = env.new()
+ | ---
+ | ...
+
+test_run:cmd("create server test with script='box/tx_man.lua'")
+ | ---
+ | - true
+ | ...
+test_run:cmd("start server test")
+ | ---
+ | - true
+ | ...
+test_run:cmd("switch test")
+ | ---
+ | - true
+ | ...
+
+-- The main goal of the test is to verify that rollback triggers of _user
+-- system space will work as desired in case of replace. The easiest way
+-- to fire rollback triggers is to use mvcc feature.
+-- 
+txn_proxy = require('txn_proxy')
+ | ---
+ | ...
+
+tx1 = txn_proxy.new()
+ | ---
+ | ...
+tx2 = txn_proxy.new()
+ | ---
+ | ...
+
+tx1:begin()
+ | ---
+ | - 
+ | ...
+tx2:begin()
+ | ---
+ | - 
+ | ...
+
+tx1("box.schema.user.create('internal1')")
+ | ---
+ | - 
+ | ...
+tx2("box.schema.user.create('internal2')")
+ | ---
+ | - 
+ | ...
+
+tx1:commit()
+ | ---
+ | - 
+ | ...
+tx2:commit()
+ | ---
+ | - - {'error': 'Transaction has been aborted by conflict'}
+ | ...
+
+test_run:cmd("switch default")
+ | ---
+ | - true
+ | ...
+test_run:cmd("stop server test")
+ | ---
+ | - true
+ | ...
+test_run:cmd("cleanup server test")
+ | ---
+ | - true
+ | ...
+

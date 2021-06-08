@@ -3089,6 +3089,17 @@ user_def_new_from_tuple(struct tuple *tuple)
 	return user;
 }
 
+static struct user_def *
+user_def_dup(struct user_def *user)
+{
+	size_t def_size = user_def_sizeof(strlen(user->name));
+	struct user_def *dup = (struct user_def *) malloc(def_size);
+	if (dup == NULL)
+		return NULL;
+	memcpy(dup, user, def_size);
+	return dup;
+}
+
 static int
 user_cache_remove_user(struct trigger *trigger, void * /* event */)
 {
@@ -3101,16 +3112,23 @@ user_cache_remove_user(struct trigger *trigger, void * /* event */)
 }
 
 static int
-user_cache_alter_user(struct trigger *trigger, void * /* event */)
+on_replace_user_rollback(struct trigger *trigger, void * /* event */)
 {
-	struct tuple *tuple = (struct tuple *)trigger->data;
-	struct user_def *user = user_def_new_from_tuple(tuple);
-	if (user == NULL)
-		return -1;
-	if (user_cache_replace(user) == NULL) {
-		free(user);
+	struct user_def *old_user = (struct user_def *) trigger->data;
+	assert(old_user != NULL);
+	if (user_cache_replace(old_user) == NULL) {
+		free(old_user);
 		return -1;
 	}
+	return 0;
+}
+
+static int
+on_replace_user_commit(struct trigger *trigger, void * /* event */)
+{
+	struct user_def *old_user = (struct user_def *) trigger->data;
+	assert(old_user != NULL);
+	free(old_user);
 	return 0;
 }
 
@@ -3171,12 +3189,22 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 				  old_user->def->name, "the user has objects");
 			return -1;
 		}
+		struct user_def *old_user_dup = user_def_dup(old_user->def);
+		if (old_user_dup == NULL)
+			return -1;
 		user_cache_delete(uid);
 		struct trigger *on_rollback =
-			txn_alter_trigger_new(user_cache_alter_user, old_tuple);
-		if (on_rollback == NULL)
+			txn_alter_trigger_new(on_replace_user_rollback,
+					      old_user_dup);
+		struct trigger *on_commit =
+			txn_alter_trigger_new(on_replace_user_commit,
+					      old_user_dup);
+		if (on_rollback == NULL || on_commit == NULL) {
+			free(old_user_dup);
 			return -1;
+		}
 		txn_stmt_on_rollback(stmt, on_rollback);
+		txn_stmt_on_commit(stmt, on_commit);
 	} else { /* UPDATE, REPLACE */
 		assert(old_user != NULL && new_tuple != NULL);
 		/*
@@ -3192,15 +3220,28 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 			free(user);
 			return -1;
 		}
-		if (user_cache_replace(user) == NULL) {
+		struct user_def *old_user_dup = user_def_dup(old_user->def);
+		if (old_user_dup == NULL) {
 			free(user);
 			return -1;
 		}
-		struct trigger *on_rollback =
-			txn_alter_trigger_new(user_cache_alter_user, old_tuple);
-		if (on_rollback == NULL)
+		if (user_cache_replace(user) == NULL) {
+			free(user);
+			free(old_user_dup);
 			return -1;
+		}
+		struct trigger *on_rollback =
+			txn_alter_trigger_new(on_replace_user_rollback,
+					      old_user_dup);
+		struct trigger *on_commit =
+			txn_alter_trigger_new(on_replace_user_commit,
+					      old_user_dup);
+		if (on_rollback == NULL || on_commit == NULL) {
+			free(old_user_dup);
+			return -1;
+		}
 		txn_stmt_on_rollback(stmt, on_rollback);
+		txn_stmt_on_commit(stmt, on_commit);
 	}
 	return 0;
 }
