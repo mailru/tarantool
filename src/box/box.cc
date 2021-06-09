@@ -1527,13 +1527,14 @@ box_wait_quorum(uint32_t lead_id, int64_t target_lsn, int quorum,
 	return 0;
 }
 
-int
-box_promote(void)
+static int
+box_clear_synchro_queue(bool demote)
 {
 	/* A guard to block multiple simultaneous function invocations. */
 	static bool in_promote = false;
 	if (in_promote) {
-		diag_set(ClientError, ER_UNSUPPORTED, "box.ctl.promote",
+		diag_set(ClientError, ER_UNSUPPORTED,
+			 demote ? "box.ctl.demote" : "box.ctl.promote",
 			 "simultaneous invocations");
 		return -1;
 	}
@@ -1554,13 +1555,18 @@ box_promote(void)
 		return -1;
 	case ELECTION_MODE_MANUAL:
 	case ELECTION_MODE_CANDIDATE:
-		run_elections = box_raft()->state != RAFT_STATE_LEADER;
+		/*
+		 * No elections involved in a DEMOTE or when the instance is
+		 * already the leader.
+		 */
+		run_elections = box_raft()->state != RAFT_STATE_LEADER &&
+				!demote;
 		/*
 		 * Do nothing when PROMOTE was already written for this term
 		 * (synchronous replication and leader election are in sync, and
 		 * both chose this node as a leader).
 		 */
-		if (txn_limbo_replica_term(&txn_limbo, instance_id) ==
+		if (!demote && txn_limbo_replica_term(&txn_limbo, instance_id) ==
 		    box_raft()->term)
 			return 0;
 
@@ -1674,15 +1680,22 @@ box_promote(void)
 			rc = -1;
 		} else {
 promote:
-			if (try_wait) {
+			if (try_wait || demote) {
 				raft_new_term(box_raft());
 				if (box_raft_wait_persisted() < 0)
 					return -1;
 			}
 			uint64_t term = box_raft()->term;
-			txn_limbo_write_promote(&txn_limbo, wait_lsn, term);
+			if (demote) {
+				txn_limbo_write_demote(&txn_limbo, wait_lsn,
+						       term);
+			} else {
+				txn_limbo_write_promote(&txn_limbo, wait_lsn,
+							term);
+			}
+			uint16_t type = demote ? IPROTO_DEMOTE : IPROTO_PROMOTE;
 			struct synchro_request req = {
-				.type = IPROTO_PROMOTE,
+				.type = type,
 				.replica_id = former_leader_id,
 				.origin_id = instance_id,
 				.lsn = wait_lsn,
@@ -1693,6 +1706,25 @@ promote:
 		}
 	}
 	return rc;
+}
+
+int
+box_promote(void)
+{
+	return box_clear_synchro_queue(false);
+}
+
+int
+box_demote(void)
+{
+	if (txn_limbo.owner_id == REPLICA_ID_NIL)
+		return 0;
+	if (txn_limbo.owner_id != instance_id) {
+		diag_set(ClientError, ER_SYNC_QUEUE_FOREIGN,
+			 txn_limbo.owner_id);
+		return -1;
+	}
+	return box_clear_synchro_queue(true);
 }
 
 int

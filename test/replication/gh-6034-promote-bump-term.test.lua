@@ -13,4 +13,5 @@ box.ctl.promote()
 assert(box.info.election.term == term + 2)
 
 -- Cleanup.
+box.ctl.demote()
 box.cfg{election_mode=election_mode}
