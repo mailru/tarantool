@@ -105,6 +105,14 @@ struct session_meta {
 struct session {
 	/** Session id. */
 	uint64_t id;
+	/** Support of graceful shutdown. */
+	bool graceful_shutdown;
+	/** Got IPROTO_SHUTDOWN from client. */
+	bool client_shutdown_got;
+	/** fiber_cond for waiting IPROTO_SHUTDON from client. */
+	struct fiber_cond shutdown_cond;
+	/** Read all data from input socket. */
+	bool read_all_from_socket;
 	/** SQL Tarantool Default storage engine. */
 	uint8_t sql_default_engine;
 	/** SQL Connection flag for current user session */
@@ -123,6 +131,8 @@ struct session {
 	struct credentials credentials;
 	/** Trigger for fiber on_stop to cleanup created on-demand session */
 	struct trigger fiber_on_stop;
+	/** List of all active sessions */
+	struct rlist in_active_list;
 };
 
 struct session_vtab {
@@ -179,6 +189,35 @@ session_find(uint64_t sid);
 extern struct rlist session_on_connect;
 
 extern struct rlist session_on_auth;
+
+/** Global list with all active sessions. */
+extern struct rlist active_sessions;
+
+/**
+  * Get next session in order of active_sessions list
+  * @param session session
+  * @retval NULL if session is last in list
+  * @retval session next session
+  */
+struct session *
+next_session(struct session *session);
+
+/**
+ * True if both conditions are true:
+ * 1) Client doesn't support graceful shutdown and red
+ * all data from input socket.
+ * 2) Client support graceful shutdown and got
+ * IPROTO_SHUTDOWN from client.
+ */
+bool
+is_shutdown_ready(struct session *session);
+
+/**
+ *
+ * Wait while not is_shutdown_ready(@a session).
+ */
+void
+wait_shutdown_ready(struct session *session);
 
 /**
  * Get the current session from @a fiber
