@@ -138,7 +138,7 @@ lbox_session_user(struct lua_State *L)
 {
 	struct user *user = user_by_id(current_session()->credentials.uid);
 	if (user)
-		lua_pushstring(L, user->def->name);
+		lua_pushstring(L, user_def(user)->name);
 	else
 		lua_pushnil(L);
 	return 1;
@@ -155,7 +155,7 @@ lbox_session_effective_user(struct lua_State *L)
 {
 	struct user *user = user_by_id(effective_user()->uid);
 	if (user)
-		lua_pushstring(L, user->def->name);
+		lua_pushstring(L, user_def(user)->name);
 	else
 		lua_pushnil(L);
 	return 1;

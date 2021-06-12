@@ -39,6 +39,7 @@
 #include "scoped_guard.h"
 #include "sequence.h"
 #include "tt_static.h"
+#include "txn.h"
 
 struct universe universe;
 static struct user users[BOX_USER_MAX];
@@ -161,10 +162,21 @@ static void
 user_create(struct user *user, uint8_t auth_token)
 {
 	assert(user->auth_token == 0);
+	rlist_create(&user->defs);
 	user->auth_token = auth_token;
 	privset_new(&user->privs);
 	region_create(&user->pool, &cord()->slabc);
 	rlist_create(&user->credentials_list);
+}
+
+static void
+user_defs_detroy(struct user *user)
+{
+	struct user_def *def, *tmp;
+	rlist_foreach_entry_safe(def, &user->defs, in_defs, tmp) {
+		rlist_del_entry(def, in_defs);
+		free(def);
+	}
 }
 
 static void
@@ -179,7 +191,7 @@ user_destroy(struct user *user)
 	 * all privileges from them first.
 	 */
 	region_destroy(&user->pool);
-	free(user->def);
+	user_defs_detroy(user);
 	memset(user, 0, sizeof(*user));
 }
 
@@ -346,7 +358,7 @@ user_reload_privs(struct user *user)
 		struct index *index = index_find(space, 0);
 		if (index == NULL)
 			return -1;
-		mp_encode_uint(key, user->def->uid);
+		mp_encode_uint(key, user_def(user)->uid);
 
 		struct iterator *it = index_create_iterator(index, ITER_EQ,
 							       key, 1);
@@ -459,6 +471,72 @@ auth_token_put(uint8_t auth_token)
 
 /* {{{ user cache */
 
+void
+user_replace_def(struct user *user, struct user_def *new_def)
+{
+	struct user_def *def, *tmp;
+	rlist_foreach_entry_safe(def, &user->defs, in_defs, tmp) {
+		if (def->tx_id == new_def->tx_id) {
+			rlist_del(&def->in_defs);
+			free(def);
+			rlist_add_tail_entry(&user->defs, new_def, in_defs);
+			//say_error("replaced deff for user uid %d", def->uid);
+			return;
+		}
+	}
+	/*
+	 * There's no user definition with given TX id so simply add
+	 * it to the list.
+	 */
+	say_error("added deff for user uid %d", new_def->uid);
+	rlist_add_tail_entry(&user->defs, new_def, in_defs);
+}
+
+void
+user_def_unlink(struct user_def *def)
+{
+	struct user *user = user_by_id(def->uid);
+	assert(user != NULL);
+	rlist_del(&def->in_defs);
+	say_error("unlikned deff for user uid %d", def->uid);
+}
+
+static int64_t user_version = 0;
+
+bool
+user_cache_check_version(struct user_def *new_def)
+{
+	struct user *user = user_by_id(new_def->uid);
+	if (user == NULL)
+		return true;
+	assert(!rlist_empty(&user->defs));
+	struct user_def *def;
+	rlist_foreach_entry(def, &user->defs, in_defs) {
+		if (def->tx_id == 0)
+			return def->version == new_def->version;
+	}
+	/* There's still no committed user def, so it's valid def. */
+	return true;
+}
+
+struct cache_entry_tx {
+
+};
+
+
+static void
+_committed();
+
+
+
+
+void
+user_def_set_verion(struct user_def *def, int64_t old_version)
+{
+	if (def->tx_id == 0)
+		def->version = user_version++;
+}
+
 struct user *
 user_cache_replace(struct user_def *def)
 {
@@ -469,10 +547,12 @@ user_cache_replace(struct user_def *def)
 		user_create(user, auth_token);
 		struct mh_i32ptr_node_t node = { def->uid, user };
 		mh_i32ptr_put(user_registry, &node, NULL, NULL);
+		rlist_add_entry(&user->defs, def, in_defs);
+		say_error("added deff for user uid %d", def->uid);
+		if (def->tx_id == 0)
 	} else {
-		free(user->def);
+		user_replace_def(user, def);
 	}
-	user->def = def;
 	return user;
 }
 
@@ -509,6 +589,44 @@ user_by_id(uint32_t uid)
 }
 
 struct user *
+user_by_id_versioned(uint32_t uid, int64_t tx_id)
+{
+	struct user *user = user_by_id(uid);
+	if (user == NULL)
+		return NULL;
+	struct user_def *def;
+	bool match = false;
+	rlist_foreach_entry(def, &user->defs, in_defs) {
+		if (def->tx_id == tx_id || def->tx_id == 0)
+			match = true;
+	}
+	return match ? user : NULL;
+}
+
+struct user_def *
+user_def_versioned(struct user *user, int64_t tx_id)
+{
+	//return rlist_empty(&user->defs) ? NULL : rlist_first_entry(&user->defs, struct user_def, in_defs);
+	struct user_def *def;
+	struct user_def *origin = NULL;
+	say_error("user_def versioned tx id %ld", tx_id);
+	rlist_foreach_entry(def, &user->defs, in_defs) {
+		if (def->tx_id == tx_id)
+			return def;
+		if (def->tx_id == 0)
+			origin = def;
+	}
+	return origin;
+}
+
+struct user_def *
+user_def(struct user *user)
+{
+	int64_t tx_id = in_txn() != NULL ? in_txn()->id : 0;
+	return user_def_versioned(user, tx_id);
+}
+
+struct user *
 user_find(uint32_t uid)
 {
 	struct user *user = user_by_id(uid);
@@ -533,7 +651,7 @@ user_find_by_name(const char *name, uint32_t len)
 		return NULL;
 	if (uid != BOX_ID_NIL) {
 		struct user *user = user_by_id(uid);
-		if (user != NULL && user->def->type == SC_USER)
+		if (user != NULL && user_def(user)->type == SC_USER)
 			return user;
 	}
 	diag_set(ClientError, ER_NO_SUCH_USER,
@@ -565,11 +683,13 @@ user_cache_init(void)
 	memcpy(def->name, "guest", name_len);
 	def->owner = ADMIN;
 	def->type = SC_USER;
+	def->tx_id = 0;
+	say_error("ADDING GUEST");
 	struct user *user = user_cache_replace(def);
 	/* Now the user cache owns the def. */
 	guest_def_guard.is_active = false;
 	/* 0 is the auth token and user id by default. */
-	assert(user->def->uid == GUEST && user->auth_token == GUEST);
+	assert(user_def(user)->uid == GUEST && user->auth_token == GUEST);
 	(void) user;
 
 	name_len = strlen("admin");
@@ -581,6 +701,8 @@ user_cache_init(void)
 	memcpy(def->name, "admin", name_len);
 	def->uid = def->owner = ADMIN;
 	def->type = SC_USER;
+	def->tx_id = 0;
+	say_error("ADDING ADMIN");
 	user = user_cache_replace(def);
 	admin_def_guard.is_active = false;
 	/*
@@ -602,7 +724,7 @@ user_cache_init(void)
 	 */
 	universe.access[ADMIN].effective = USER_ACCESS_FULL;
 	/* ADMIN is both the auth token and user id for 'admin' user. */
-	assert(user->def->uid == ADMIN && user->auth_token == ADMIN);
+	assert(user_def(user)->uid == ADMIN && user->auth_token == ADMIN);
 }
 
 void
@@ -650,7 +772,7 @@ role_check(struct user *grantee, struct user *role)
 	if (user_map_is_set(&transitive_closure,
 			    role->auth_token)) {
 		diag_set(ClientError, ER_ROLE_LOOP,
-			  role->def->name, grantee->def->name);
+			  user_def(role)->name, user_def(grantee)->name);
 		return -1;
 	}
 	return 0;
@@ -793,7 +915,7 @@ credentials_create(struct credentials *cr, struct user *user)
 {
 	cr->auth_token = user->auth_token;
 	cr->universal_access = universe.access[user->auth_token].effective;
-	cr->uid = user->def->uid;
+	cr->uid = user_def(user)->uid;
 	rlist_add_entry(&user->credentials_list, cr, in_user);
 }
 

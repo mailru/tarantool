@@ -306,7 +306,7 @@ access_check_session(struct user *user)
 	if (!(universe.access[user->auth_token].effective & PRIV_S)) {
 		diag_set(AccessDeniedError, priv_name(PRIV_S),
 			 schema_object_name(SC_UNIVERSE), "",
-			 user->def->name);
+			 user_def(user)->name);
 		return -1;
 	}
 	return 0;
@@ -332,7 +332,7 @@ access_check_universe_object(user_access_t access,
 			diag_set(AccessDeniedError,
 				 priv_name(denied_access),
 				 schema_object_name(object_type), object_name,
-				 user->def->name);
+				 user_def(user)->name);
 		} else {
 			/*
 			 * The user may have been dropped, in

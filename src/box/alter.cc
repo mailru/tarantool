@@ -113,7 +113,7 @@ access_check_ddl(const char *name, uint32_t object_id, uint32_t owner_uid,
 		object_name = schema_object_name(type);
 		pname = priv_name(access);
 	}
-	diag_set(AccessDeniedError, pname, object_name, name, user->def->name);
+	diag_set(AccessDeniedError, pname, object_name, name, user_def(user)->name);
 	return -1;
 }
 
@@ -2926,7 +2926,7 @@ on_replace_dd_truncate(struct trigger * /* trigger */, void *event)
 int
 user_has_data(struct user *user, bool *has_data)
 {
-	uint32_t uid = user->def->uid;
+	uint32_t uid = user_def(user)->uid;
 	uint32_t spaces[] = { BOX_SPACE_ID, BOX_FUNC_ID, BOX_SEQUENCE_ID,
 			      BOX_PRIV_ID, BOX_PRIV_ID };
 	/*
@@ -3085,19 +3085,11 @@ user_def_new_from_tuple(struct tuple *tuple)
 		if (user_def_fill_auth_data(user, auth_data) != 0)
 			return NULL;
 	}
+	rlist_create(&user->in_defs);
+	user->tx_id = in_txn() != NULL ? in_txn()->id : 0;
+	user->version = 0;
 	def_guard.is_active = false;
 	return user;
-}
-
-static int
-user_cache_remove_user(struct trigger *trigger, void * /* event */)
-{
-	struct tuple *tuple = (struct tuple *)trigger->data;
-	uint32_t uid;
-	if (tuple_field_u32(tuple, BOX_USER_FIELD_ID, &uid) != 0)
-		return -1;
-	user_cache_delete(uid);
-	return 0;
 }
 
 static int
@@ -3118,6 +3110,36 @@ user_cache_alter_user(struct trigger *trigger, void * /* event */)
 	return 0;
 }
 
+static int
+on_delete_user_rollback(struct trigger *trigger, void * /* event */)
+{
+	struct user_def *user = (struct user_def *)trigger->data;
+	assert(user != NULL);
+	user_cache_replace(user);
+	return 0;
+}
+
+static int
+on_create_user_commit(struct trigger *trigger, void *)
+{
+	struct user_def *user = (struct user_def *) trigger->data;
+	assert(user != NULL);
+	user_def_unlink(user);
+	user->tx_id = 0;
+	user_cache_replace(user);
+	return 0;
+}
+
+static int
+on_create_user_rollback(struct trigger *trigger, void *)
+{
+	struct user_def *user = (struct user_def *) trigger->data;
+	assert(user != NULL);
+	user_def_unlink(user);
+	free(user);
+	return 0;
+}
+
 /**
  * A trigger invoked on replace in the user table.
  */
@@ -3133,7 +3155,8 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 	if (tuple_field_u32(old_tuple ? old_tuple : new_tuple,
 			    BOX_USER_FIELD_ID, &uid) != 0)
 		return -1;
-	struct user *old_user = user_by_id(uid);
+	int tx_id = in_txn() != NULL ? in_txn()->id : 0;
+	struct user *old_user = user_by_id_versioned(uid, tx_id);
 	if (new_tuple != NULL && old_user == NULL) { /* INSERT */
 		struct user_def *user = user_def_new_from_tuple(new_tuple);
 		if (user == NULL)
@@ -3149,19 +3172,23 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 		}
 		def_guard.is_active = false;
 		struct trigger *on_rollback =
-			txn_alter_trigger_new(user_cache_remove_user, new_tuple);
-		if (on_rollback == NULL)
+			txn_alter_trigger_new(on_create_user_rollback, user);
+		struct trigger *on_commit =
+			txn_alter_trigger_new(on_create_user_commit, user);
+		if (on_rollback == NULL || on_commit == NULL)
 			return -1;
 		txn_stmt_on_rollback(stmt, on_rollback);
+		txn_stmt_on_commit(stmt, on_commit);
 	} else if (new_tuple == NULL) { /* DELETE */
-		if (access_check_ddl(old_user->def->name, old_user->def->uid,
-				 old_user->def->owner, old_user->def->type,
-				 PRIV_D) != 0)
+		struct user_def *old_def = user_def_versioned(old_user, tx_id);
+		assert(old_def != NULL);
+		if (access_check_ddl(old_def->name, old_def->uid,
+				     old_def->owner, old_def->type,
+				     PRIV_D) != 0)
 			return -1;
 		/* Can't drop guest or super user */
 		if (uid <= (uint32_t) BOX_SYSTEM_USER_ID_MAX || uid == SUPER) {
-			diag_set(ClientError, ER_DROP_USER,
-				  old_user->def->name,
+			diag_set(ClientError, ER_DROP_USER, old_def->name,
 				  "the user or the role is a system");
 			return -1;
 		}
@@ -3175,17 +3202,19 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 		}
 		if (has_data) {
 			diag_set(ClientError, ER_DROP_USER,
-				  old_user->def->name, "the user has objects");
+				  old_def->name, "the user has objects");
 			return -1;
 		}
 		user_cache_delete(uid);
 		struct trigger *on_rollback =
-			txn_alter_trigger_new(user_cache_alter_user, old_tuple);
+			txn_alter_trigger_new(on_delete_user_rollback, old_def);
 		if (on_rollback == NULL)
 			return -1;
 		txn_stmt_on_rollback(stmt, on_rollback);
 	} else { /* UPDATE, REPLACE */
 		assert(old_user != NULL && new_tuple != NULL);
+		struct user_def *old_def = user_def_versioned(old_user, tx_id);
+		assert(old_def != NULL);
 		/*
 		 * Allow change of user properties (name,
 		 * password) but first check that the change is
@@ -3195,7 +3224,7 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 		if (user == NULL)
 			return -1;
 		if (access_check_ddl(user->name, user->uid, user->uid,
-				 old_user->def->type, PRIV_A) != 0)
+				     old_def->type, PRIV_A) != 0)
 			return -1;
 		auto def_guard = make_scoped_guard([=] { free(user); });
 		try {
@@ -3896,17 +3925,17 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 		return -1;
 	}
 	const char *name = schema_find_name(priv->object_type, priv->object_id);
-	if (access_check_ddl(name, priv->object_id, grantor->def->uid,
+	if (access_check_ddl(name, priv->object_id, user_def(grantor)->uid,
 			     priv->object_type, priv_type) != 0)
 		return -1;
 	switch (priv->object_type) {
 	case SC_UNIVERSE:
-		if (grantor->def->uid != ADMIN) {
+		if (user_def(grantor)->uid != ADMIN) {
 			diag_set(AccessDeniedError,
 				  priv_name(priv_type),
 				  schema_object_name(SC_UNIVERSE),
 				  name,
-				  grantor->def->name);
+				  user_def(grantor)->name);
 			return -1;
 		}
 		break;
@@ -3915,12 +3944,12 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 		struct space *space = space_cache_find(priv->object_id);
 		if (space == NULL)
 			return -1;
-		if (space->def->uid != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
+		if (space->def->uid != user_def(grantor)->uid &&
+		    user_def(grantor)->uid != ADMIN) {
 			diag_set(AccessDeniedError,
 				  priv_name(priv_type),
 				  schema_object_name(SC_SPACE), name,
-				  grantor->def->name);
+				 user_def(grantor)->name);
 			return -1;
 		}
 		break;
@@ -3932,12 +3961,12 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 			diag_set(ClientError, ER_NO_SUCH_FUNCTION, int2str(priv->object_id));
 			return -1;
 		}
-		if (func->def->uid != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
+		if (func->def->uid != user_def(grantor)->uid &&
+		    user_def(grantor)->uid != ADMIN) {
 			diag_set(AccessDeniedError,
 				  priv_name(priv_type),
 				  schema_object_name(SC_FUNCTION), name,
-				  grantor->def->name);
+				  user_def(grantor)->name);
 			return -1;
 		}
 		break;
@@ -3949,12 +3978,12 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 			diag_set(ClientError, ER_NO_SUCH_SEQUENCE, int2str(priv->object_id));
 			return -1;
 		}
-		if (seq->def->uid != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
+		if (seq->def->uid != user_def(grantor)->uid &&
+		    user_def(grantor)->uid != ADMIN) {
 			diag_set(AccessDeniedError,
 				  priv_name(priv_type),
 				  schema_object_name(SC_SEQUENCE), name,
-				  grantor->def->name);
+				  user_def(grantor)->name);
 			return -1;
 		}
 		break;
@@ -3962,9 +3991,9 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 	case SC_ROLE:
 	{
 		struct user *role = user_by_id(priv->object_id);
-		if (role == NULL || role->def->type != SC_ROLE) {
+		if (role == NULL || user_def(role)->type != SC_ROLE) {
 			diag_set(ClientError, ER_NO_SUCH_ROLE,
-				  role ? role->def->name :
+				  role ? user_def(role)->name :
 				  int2str(priv->object_id));
 			return -1;
 		}
@@ -3972,13 +4001,13 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 		 * Only the creator of the role can grant or revoke it.
 		 * Everyone can grant 'PUBLIC' role.
 		 */
-		if (role->def->owner != grantor->def->uid &&
-		    grantor->def->uid != ADMIN &&
-		    (role->def->uid != PUBLIC || priv->access != PRIV_X)) {
+		if (user_def(role)->owner != user_def(grantor)->uid &&
+		    user_def(grantor)->uid != ADMIN &&
+		    (user_def(role)->uid != PUBLIC || priv->access != PRIV_X)) {
 			diag_set(AccessDeniedError,
 				  priv_name(priv_type),
 				  schema_object_name(SC_ROLE), name,
-				  grantor->def->name);
+				 user_def(grantor)->name);
 			return -1;
 		}
 		/* Not necessary to do during revoke, but who cares. */
@@ -3989,18 +4018,18 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 	case SC_USER:
 	{
 		struct user *user = user_by_id(priv->object_id);
-		if (user == NULL || user->def->type != SC_USER) {
+		if (user == NULL || user_def(user)->type != SC_USER) {
 			diag_set(ClientError, ER_NO_SUCH_USER,
-				  user ? user->def->name :
+				  user ? user_def(user)->name :
 				  int2str(priv->object_id));
 			return -1;
 		}
-		if (user->def->owner != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
+		if (user_def(user)->owner != user_def(grantor)->uid &&
+		    user_def(grantor)->uid != ADMIN) {
 			diag_set(AccessDeniedError,
 				  priv_name(priv_type),
 				  schema_object_name(SC_USER), name,
-				  grantor->def->name);
+				  user_def(grantor)->name);
 			return -1;
 		}
 		break;
@@ -4012,10 +4041,10 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 	case SC_ENTITY_USER:
 	{
 		/* Only admin may grant privileges on an entire entity. */
-		if (grantor->def->uid != ADMIN) {
+		if (user_def(grantor)->uid != ADMIN) {
 			diag_set(AccessDeniedError, priv_name(priv_type),
 				  schema_object_name(priv->object_type), name,
-				  grantor->def->name);
+				  user_def(grantor)->name);
 			return -1;
 		}
 	}
@@ -4046,7 +4075,7 @@ grant_or_revoke(struct priv_def *priv)
 	 */
 	if (priv->object_type == SC_ROLE && !(priv->access & ~PRIV_X)) {
 		struct user *role = user_by_id(priv->object_id);
-		if (role == NULL || role->def->type != SC_ROLE)
+		if (role == NULL || user_def(role)->type != SC_ROLE)
 			return 0;
 		if (priv->access) {
 			if (role_grant(grantee, role) != 0)

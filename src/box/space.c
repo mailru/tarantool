@@ -87,12 +87,12 @@ access_check_space(struct space *space, user_access_t access)
 				diag_set(AccessDeniedError,
 					 priv_name(PRIV_U),
 					 schema_object_name(SC_UNIVERSE), "",
-					 user->def->name);
+					 user_def(user)->name);
 			} else {
 				diag_set(AccessDeniedError,
 					 priv_name(access),
 					 schema_object_name(SC_SPACE),
-					 space->def->name, user->def->name);
+					 space->def->name, user_def(user)->name);
 			}
 		}
 		return -1;

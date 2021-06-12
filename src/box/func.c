@@ -553,7 +553,7 @@ func_access_check(struct func *func)
 		if (user != NULL) {
 			diag_set(AccessDeniedError, priv_name(PRIV_X),
 				 schema_object_name(SC_FUNCTION),
-				 func->def->name, user->def->name);
+				 func->def->name, user_def(user)->name);
 		}
 		return -1;
 	}

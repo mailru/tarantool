@@ -125,7 +125,7 @@ box_module_reload(const char *name)
 		if (user != NULL)
 			diag_set(AccessDeniedError, priv_name(PRIV_U),
 				 schema_object_name(SC_UNIVERSE), "",
-				 user->def->name);
+				 user_def(user)->name);
 		return -1;
 	}
 	return schema_module_reload(name, name + strlen(name));

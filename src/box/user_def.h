@@ -166,6 +166,13 @@ struct user_def {
 	enum schema_object_type type;
 	/** User password - hash2 */
 	char hash2[SCRAMBLE_SIZE];
+	struct rlist in_defs;
+	/**
+	 * Id of the transaction modified this def. In case of
+	 * autocommit mode its 0.
+	  */
+	int64_t tx_id;
+	int64_t version;
 	/** User name - for error messages and debugging */
 	char name[0];
 };

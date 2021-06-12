@@ -1783,8 +1783,8 @@ vdbe_emit_revoke_object(struct Parse *parser, const char *object_type,
 		if (!access[token].granted)
 			continue;
 		had_grants = true;
-		const struct user *user = user_find_by_token(token);
-		sqlVdbeAddOp2(v, OP_Integer, user->def->uid, key_reg);
+		struct user *user = user_find_by_token(token);
+		sqlVdbeAddOp2(v, OP_Integer, user_def(user)->uid, key_reg);
 		sqlVdbeAddOp4(v, OP_String8, 0, key_reg + 1, 0,
 			      object_type, P4_STATIC);
 		sqlVdbeAddOp2(v, OP_Integer, object_id, key_reg + 2);

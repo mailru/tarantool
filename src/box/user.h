@@ -72,7 +72,7 @@ rb_proto(, privset_, privset_t, struct priv_def);
 
 struct user
 {
-	struct user_def *def;
+	struct rlist defs;
 	/**
 	 * An id in privileges array to quickly find a
 	 * respective privilege.
@@ -106,6 +106,12 @@ struct user *
 user_by_id(uint32_t uid);
 
 struct user *
+user_by_id_versioned(uint32_t uid, int64_t tx_id);
+
+struct user_def *
+user_def_versioned(struct user *user, int64_t tx_id);
+
+struct user *
 user_find_by_name(const char *name, uint32_t len);
 
 /* Find a user by name. Used by authentication. */
@@ -115,6 +121,9 @@ user_find(uint32_t uid);
 /* Find a user by authentication token. */
 struct user *
 user_find_by_token(uint8_t auth_token);
+
+struct user_def *
+user_def(struct user *user);
 
 /** Create a cache of user's privileges in @a cr. */
 void
@@ -158,6 +167,10 @@ credentials_reset(struct credentials *cr, struct user *new_user)
  * objects, such as spaces and functions.
  */
 extern struct user *guest_user, *admin_user;
+
+void
+user_def_unlink(struct user_def *def);
+
 
 /*
  * Insert or update user object (a cache entry

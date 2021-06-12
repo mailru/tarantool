@@ -46,20 +46,20 @@ authenticate(const char *user_name, uint32_t len, const char *salt,
 	uint32_t part_count;
 	uint32_t scramble_len;
 	const char *scramble;
-	struct on_auth_trigger_ctx auth_res = { user->def->name, true };
+	struct on_auth_trigger_ctx auth_res = { user_def(user)->name, true };
 	/*
 	 * Allow authenticating back to GUEST user without
 	 * checking a password. This is useful for connection
 	 * pooling.
 	 */
 	part_count = mp_decode_array(&tuple);
-	if (part_count == 0 && user->def->uid == GUEST) {
-		if (memcmp(user->def->hash2, zero_hash, SCRAMBLE_SIZE) == 0)
+	if (part_count == 0 && user_def(user)->uid == GUEST) {
+		if (memcmp(user_def(user)->hash2, zero_hash, SCRAMBLE_SIZE) == 0)
 			goto ok; /* no password is set, OK */
 		char hash2[SCRAMBLE_SIZE];
 		base64_decode(CHAP_SHA1_EMPTY_PASSWORD, SCRAMBLE_BASE64_SIZE,
 			      hash2, SCRAMBLE_SIZE);
-		if (memcmp(user->def->hash2, hash2, SCRAMBLE_SIZE) == 0)
+		if (memcmp(user_def(user)->hash2, hash2, SCRAMBLE_SIZE) == 0)
 			goto ok; /* empty password is set, OK */
 	}
 
@@ -89,11 +89,11 @@ authenticate(const char *user_name, uint32_t len, const char *salt,
 			   "invalid scramble size");
 	}
 
-	if (scramble_check(scramble, salt, user->def->hash2)) {
+	if (scramble_check(scramble, salt, user_def(user)->hash2)) {
 		auth_res.is_authenticated = false;
 		if (session_run_on_auth_triggers(&auth_res) != 0)
 			diag_raise();
-		tnt_raise(ClientError, ER_PASSWORD_MISMATCH, user->def->name);
+		tnt_raise(ClientError, ER_PASSWORD_MISMATCH, user_def(user)->name);
 	}
 ok:
 	/* check and run auth triggers on success */

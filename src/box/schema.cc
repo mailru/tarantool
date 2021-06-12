@@ -709,7 +709,7 @@ schema_find_name(enum schema_object_type type, uint32_t object_id)
 			struct user *role = user_by_id(object_id);
 			if (role == NULL)
 				break;
-			return role->def->name;
+			return user_def(role)->name;
 		}
 	default:
 		break;

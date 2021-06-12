@@ -287,12 +287,12 @@ access_check_sequence(struct sequence *seq)
 				diag_set(AccessDeniedError,
 					 priv_name(PRIV_U),
 					 schema_object_name(SC_UNIVERSE), "",
-					 user->def->name);
+					 user_def(user)->name);
 			} else {
 				diag_set(AccessDeniedError,
 					 priv_name(access),
 					 schema_object_name(SC_SEQUENCE),
-					 seq->def->name, user->def->name);
+					 seq->def->name, user_def(user)->name);
 			}
 		}
 		return -1;
