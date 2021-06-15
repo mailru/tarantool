@@ -223,7 +223,7 @@ local function test_iscdata(test, module)
 end
 
 require('tap').test("module_api", function(test)
-    test:plan(38)
+    test:plan(41)
     local status, module = pcall(require, 'module_api')
     test:is(status, true, "module")
     test:ok(status, "module is loaded")
@@ -252,8 +252,6 @@ require('tap').test("module_api", function(test)
     test:test("iscdata", test_iscdata, module)
     test:test("buffers", test_buffers, module)
     test:test("tuple_validate", test_tuple_validate, module)
-
-    space:drop()
 end)
 
 os.exit(0)
