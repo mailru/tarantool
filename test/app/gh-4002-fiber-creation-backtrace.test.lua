@@ -23,5 +23,12 @@ bar = function(n) if n ~= 0 then baz(n-1) else fiber.create(foo) end end
 baz = function(n) bar(n) end
 
 baz(10)
+assert(parent_stack_len == -1)
+
+if stack_len ~= -1 then fiber:parent_bt_enable() end
+baz(10)
 assert(parent_stack_len > 0 or stack_len == -1)
 
+if stack_len ~= -1 then fiber:parent_bt_disable() end
+baz(10)
+assert(parent_stack_len == -1)
