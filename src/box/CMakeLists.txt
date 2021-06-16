@@ -114,6 +114,8 @@ add_library(xlog STATIC xlog.c)
 target_link_libraries(xlog core box_error crc32 ${ZSTD_LIBRARIES})
 
 add_library(box STATIC
+    allocator.cc
+    memtx_allocator.cc
     msgpack.c
     iproto.cc
     xrow_io.cc
@@ -129,9 +131,10 @@ add_library(box STATIC
     memtx_tx.c
     module_cache.c
     engine.c
-    memtx_engine.c
+    memtx_engine.cc
     memtx_space.c
     sysview.c
+    sysalloc.c
     blackhole.c
     service_engine.c
     session_settings.c
@@ -200,7 +203,7 @@ add_library(box STATIC
     lua/lib.c
     lua/serialize_lua.c
     lua/tuple.c
-    lua/slab.c
+    lua/slab.cc
     lua/index.c
     lua/space.cc
     lua/sequence.c

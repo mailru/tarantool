@@ -43,20 +43,15 @@
 #include "memory.h"
 #include "box/engine.h"
 #include "box/memtx_engine.h"
+#include "box/allocator.h"
 
 static int
-small_stats_noop_cb(const struct mempool_stats *stats, void *cb_ctx)
+small_stats_lua_cb(const void *stats, void *cb_ctx)
 {
-	(void) stats;
-	(void) cb_ctx;
-	return 0;
-}
-
-static int
-small_stats_lua_cb(const struct mempool_stats *stats, void *cb_ctx)
-{
+	const struct mempool_stats *mempool_stats =
+		(const struct mempool_stats *)stats;
 	/** Don't publish information about empty slabs. */
-	if (stats->slabcount == 0)
+	if (mempool_stats->slabcount == 0)
 		return 0;
 
 	struct lua_State *L = (struct lua_State *) cb_ctx;
@@ -75,27 +70,28 @@ small_stats_lua_cb(const struct mempool_stats *stats, void *cb_ctx)
 	luaL_setmaphint(L, -1);
 
 	lua_pushstring(L, "mem_used");
-	luaL_pushuint64(L, stats->totals.used);
+	luaL_pushuint64(L, mempool_stats->totals.used);
 	lua_settable(L, -3);
 
 	lua_pushstring(L, "slab_size");
-	luaL_pushuint64(L, stats->slabsize);
+	luaL_pushuint64(L, mempool_stats->slabsize);
 	lua_settable(L, -3);
 
 	lua_pushstring(L, "mem_free");
-	luaL_pushuint64(L, stats->totals.total - stats->totals.used);
+	luaL_pushuint64(L, mempool_stats->totals.total -
+			mempool_stats->totals.used);
 	lua_settable(L, -3);
 
 	lua_pushstring(L, "item_size");
-	luaL_pushuint64(L, stats->objsize);
+	luaL_pushuint64(L, mempool_stats->objsize);
 	lua_settable(L, -3);
 
 	lua_pushstring(L, "slab_count");
-	luaL_pushuint64(L, stats->slabcount);
+	luaL_pushuint64(L, mempool_stats->slabcount);
 	lua_settable(L, -3);
 
 	lua_pushstring(L, "item_count");
-	luaL_pushuint64(L, stats->objcount);
+	luaL_pushuint64(L, mempool_stats->objcount);
 	lua_settable(L, -3);
 
 	lua_settable(L, -3);
@@ -108,13 +104,14 @@ lbox_slab_stats(struct lua_State *L)
 	struct memtx_engine *memtx;
 	memtx = (struct memtx_engine *)engine_by_name("memtx");
 
-	struct small_stats totals;
+	struct allocator_stats totals;
+	memset(&totals, 0, sizeof(totals));
 	lua_newtable(L);
 	/*
 	 * List all slabs used for tuples and slabs used for
 	 * indexes, with their stats.
 	 */
-	small_stats(&memtx->alloc, &totals, small_stats_lua_cb, L);
+	SmallAlloc::stats(&totals, small_stats_lua_cb, L);
 	struct mempool_stats index_stats;
 	mempool_stats(&memtx->index_extent_pool, &index_stats);
 	small_stats_lua_cb(&index_stats, L);
@@ -128,34 +125,35 @@ lbox_slab_info(struct lua_State *L)
 	struct memtx_engine *memtx;
 	memtx = (struct memtx_engine *)engine_by_name("memtx");
 
-	struct small_stats totals;
+	struct allocator_stats stats;
+	memset(&stats, 0, sizeof(stats));
 
 	/*
 	 * List all slabs used for tuples and slabs used for
 	 * indexes, with their stats.
 	 */
 	lua_newtable(L);
-	small_stats(&memtx->alloc, &totals, small_stats_noop_cb, L);
+	allocators_stats(&stats);
 	struct mempool_stats index_stats;
 	mempool_stats(&memtx->index_extent_pool, &index_stats);
 
 	double ratio;
 	char ratio_buf[32];
 
-	ratio = 100 * ((double) totals.used
-		/ ((double) totals.total + 0.0001));
+	ratio = 100 * ((double) (stats.small.used + stats.sys.used)
+		/ ((double) (stats.small.total + stats.sys.total) + 0.0001));
 	snprintf(ratio_buf, sizeof(ratio_buf), "%0.2lf%%", ratio);
 
 	/** How much address space has been already touched */
 	lua_pushstring(L, "items_size");
-	luaL_pushuint64(L, totals.total);
+	luaL_pushuint64(L, stats.small.total + stats.sys.total);
 	lua_settable(L, -3);
 	/**
 	 * How much of this formatted address space is used for
 	 * actual data.
 	 */
 	lua_pushstring(L, "items_used");
-	luaL_pushuint64(L, totals.used);
+	luaL_pushuint64(L, stats.small.used + stats.sys.used);
 	lua_settable(L, -3);
 
 	/*
@@ -187,10 +185,11 @@ lbox_slab_info(struct lua_State *L)
 	 * data (tuples and indexes).
 	 */
 	lua_pushstring(L, "arena_used");
-	luaL_pushuint64(L, totals.used + index_stats.totals.used);
+	/** System allocator does not use arena. */
+	luaL_pushuint64(L, stats.small.used + index_stats.totals.used);
 	lua_settable(L, -3);
 
-	ratio = 100 * ((double) (totals.used + index_stats.totals.used)
+	ratio = 100 * ((double) (stats.small.used + index_stats.totals.used)
 		       / (double) arena_size);
 	snprintf(ratio_buf, sizeof(ratio_buf), "%0.1lf%%", ratio);
 
@@ -257,9 +256,7 @@ lbox_runtime_info(struct lua_State *L)
 static int
 lbox_slab_check(MAYBE_UNUSED struct lua_State *L)
 {
-	struct memtx_engine *memtx;
-	memtx = (struct memtx_engine *)engine_by_name("memtx");
-	slab_cache_check(memtx->alloc.cache);
+	slab_cache_check(SmallAlloc::get_alloc()->cache);
 	return 0;
 }
 

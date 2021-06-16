@@ -40,6 +40,7 @@
 #include "engine.h"
 #include "xlog.h"
 #include "salad/stailq.h"
+#include "sysalloc.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -49,6 +50,18 @@ struct index;
 struct fiber;
 struct tuple;
 struct tuple_format;
+
+/**
+ * Free mode, determines a strategy for freeing up memory
+ */
+enum memtx_engine_free_mode {
+	/** Free objects immediately. */
+	MEMTX_ENGINE_FREE,
+	/** Collect garbage after delayed free. */
+	MEMTX_ENGINE_COLLECT_GARBAGE,
+	/** Postpone deletion of objects. */
+	MEMTX_ENGINE_DELAYED_FREE,
+};
 
 /**
  * The state of memtx recovery process.
@@ -135,8 +148,6 @@ struct memtx_engine {
 	struct slab_arena arena;
 	/** Slab cache for allocating tuples. */
 	struct slab_cache slab_cache;
-	/** Tuple allocator. */
-	struct small_alloc alloc;
 	/** Slab cache for allocating index extents. */
 	struct slab_cache index_slab_cache;
 	/** Index extent allocator. */
@@ -178,6 +189,10 @@ struct memtx_engine {
 	 * memtx_gc_task::link.
 	 */
 	struct stailq gc_queue;
+	/**
+	 * Free mode, determines a strategy for freeing up memory
+	 */
+	enum memtx_engine_free_mode free_mode;
 };
 
 struct memtx_gc_task;
@@ -211,9 +226,9 @@ memtx_engine_schedule_gc(struct memtx_engine *memtx,
 
 struct memtx_engine *
 memtx_engine_new(const char *snap_dirname, bool force_recovery,
-		 uint64_t tuple_arena_max_size,
-		 uint32_t objsize_min, bool dontdump,
-		 unsigned granularity, float alloc_factor);
+		 uint64_t tuple_arena_max_size, uint32_t objsize_min,
+		 bool dontdump, unsigned granularity,
+		 const char *allocator, float alloc_factor);
 
 int
 memtx_engine_recover_snapshot(struct memtx_engine *memtx,
@@ -244,14 +259,6 @@ memtx_enter_delayed_free_mode(struct memtx_engine *memtx);
  */
 void
 memtx_leave_delayed_free_mode(struct memtx_engine *memtx);
-
-/** Allocate a memtx tuple. @sa tuple_new(). */
-struct tuple *
-memtx_tuple_new(struct tuple_format *format, const char *data, const char *end);
-
-/** Free a memtx tuple. @sa tuple_delete(). */
-void
-memtx_tuple_delete(struct tuple_format *format, struct tuple *tuple);
 
 /** Tuple format vtab for memtx engine. */
 extern struct tuple_format_vtab memtx_tuple_format_vtab;
@@ -297,15 +304,15 @@ memtx_index_def_change_requires_rebuild(struct index *index,
 
 static inline struct memtx_engine *
 memtx_engine_new_xc(const char *snap_dirname, bool force_recovery,
-		    uint64_t tuple_arena_max_size,
-		    uint32_t objsize_min, bool dontdump,
-		    unsigned granularity, float alloc_factor)
+		    uint64_t tuple_arena_max_size, uint32_t objsize_min,
+		    bool dontdump, unsigned granularity,
+		    const char *allocator, float alloc_factor)
 {
 	struct memtx_engine *memtx;
 	memtx = memtx_engine_new(snap_dirname, force_recovery,
 				 tuple_arena_max_size,
 				 objsize_min, dontdump,
-				 granularity, alloc_factor);
+				 granularity, allocator, alloc_factor);
 	if (memtx == NULL)
 		diag_raise();
 	return memtx;
