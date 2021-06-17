@@ -1687,16 +1687,19 @@ box_promote(void)
 			rc = -1;
 		} else {
 promote:
-			/* We cannot possibly get here in a volatile state. */
-			assert(box_raft()->volatile_term == box_raft()->term);
-			txn_limbo_write_promote(&txn_limbo, wait_lsn,
-						box_raft()->term);
+			if (try_wait) {
+				raft_new_term(box_raft());
+				if (box_raft_wait_persisted() < 0)
+					return -1;
+			}
+			uint64_t term = box_raft()->term;
+			txn_limbo_write_promote(&txn_limbo, wait_lsn, term);
 			struct synchro_request req = {
 				.type = IPROTO_PROMOTE,
 				.replica_id = former_leader_id,
 				.origin_id = instance_id,
 				.lsn = wait_lsn,
-				.term = box_raft()->term,
+				.term = term,
 			};
 			txn_limbo_process(&txn_limbo, &req);
 			assert(txn_limbo_is_empty(&txn_limbo));
