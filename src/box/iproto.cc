@@ -38,6 +38,7 @@
 #include <small/obuf.h>
 #include <base64.h>
 
+#include <on_shutdown.h>
 #include "version.h"
 #include "fiber.h"
 #include "cbus.h"
@@ -54,7 +55,6 @@
 #include "box.h"
 #include "call.h"
 #include "tuple_convert.h"
-#include "session.h"
 #include "xrow.h"
 #include "schema.h" /* schema_version */
 #include "replication.h" /* instance_uuid */
@@ -119,6 +119,9 @@ struct iproto_thread {
 	 */
 	struct cmsg_hop destroy_route[2];
 	struct cmsg_hop disconnect_route[2];
+	struct cmsg_hop shutdown_route[1];
+	struct cmsg_hop graceful_shutdown_route[1];
+	struct cmsg_hop not_graceful_shutdown_route[1];
 	struct cmsg_hop misc_route[2];
 	struct cmsg_hop call_route[2];
 	struct cmsg_hop select_route[2];
@@ -140,6 +143,10 @@ struct iproto_thread {
 	 */
 	struct rlist stopped_connections;
 	/*
+	* List of all connections.
+	*/
+	struct rlist all_connections;
+	/*
 	 * Iproto thread stat
 	 */
 	struct rmean *rmean;
@@ -147,6 +154,21 @@ struct iproto_thread {
 	 * Iproto thread id
 	 */
 	uint32_t id;
+	/*
+	 * Shutdown status.
+	 */
+	bool is_shutdown_active;
+	/**
+	 * Wait for shutdown readiness:
+	 * - all connections marked about shutdown readiness and closed
+	 *   after it
+	 * - active requests num is zero
+	 *
+	 * Broadcast everyone who waits for end of graceful shutdown.
+	 */
+    	struct ev_async shutdown_ready;
+	/** Wait until iproto_thread becomes ready for shutdown. */
+	struct fiber_cond shutdown_cond;
 	/*
 	 * Iproto binary listener
 	 */
@@ -498,12 +520,47 @@ struct iproto_connection
 	 */
 	struct cmsg destroy_msg;
 	/**
+	 * Pre-allocated msg. Is sent after shutdown has started. If session
+	 * support graceful shutdown, then pushes graceful_shutdown_msg to its
+	 * route, else pushes not_graceful_shutdown_msg to its route.
+	 */
+	 struct cmsg shutdown_msg;
+	/**
+	 * Pre-allocated msg. Is sent after shutdown has started only if
+	 * session support graceful shutdown. Sends IPROTO_SHUTDOWN to remote
+	 * client.
+	 */
+	struct cmsg graceful_shutdown_msg;
+	/**
+	 * Pre-allocated msg. Is sent after shutdown has started only if
+	 * session doesn't support graceful shutdown(or isn't exist). Reads
+	 * data from socket until iproto boundary or until msg_max_limit is
+	 * reached and shutdown(con, SHUT_RD). Then, notify session (if session
+	 * exists) about shutdown of socket.
+	 */
+	struct cmsg not_graceful_shutdown_msg;
+	/**
+	 * Wait for shutdown readiness and close connection.
+	*/
+	struct ev_async after_shutdown;
+	/** Happened shutdown(socket, SHUT_RD) on input socket. */
+	bool socket_shutdown;
+	/**
+	* Connection support graceful shutdown. Is set only after start of
+	* shutdown process.
+	*/
+	bool graceful_shutdown;
+	/** Got shutdown packet from client. */
+	bool graceful_shutdown_got;
+	/**
 	 * Connection state. Mainly it is used to determine when
 	 * the connection can be destroyed, and for debug purposes
 	 * to assert on a double destroy, for example.
 	 */
 	enum iproto_connection_state state;
 	struct rlist in_stop_list;
+	/** Member of list with all connections in iproto_thread. */
+	struct rlist in_all_list;
 	/**
 	 * Kharon is used to implement box.session.push().
 	 * When a new push is ready, tx uses kharon to notify
@@ -568,11 +625,51 @@ iproto_check_msg_max(struct iproto_thread *iproto_thread)
 	return request_count > (size_t) iproto_msg_max;
 }
 
+/**
+ * iproto_thread is shutdown ready if both conditions are true:
+ * 1) There are no active requests
+ * 2) There are no alive connections
+ */
+static inline bool
+iproto_is_thread_shutdown_ready(struct iproto_thread *iproto_thread)
+{
+	return mempool_count(&iproto_thread->iproto_connection_pool) == 0 &&
+	       mempool_count(&iproto_thread->iproto_msg_pool) == 0;
+}
+
+/**
+  * mempool_free(&iproto_thread->iproto_connection_pool, con) wrapper for
+  * detecting the moment when the last connection in @a iproto_thread was
+  * freed during shutdown process.
+  */
+static inline void
+iproto_connection_free(struct iproto_connection *con)
+{
+	mempool_free(&con->iproto_thread->iproto_connection_pool, con);
+	if (ev_is_active(&con->iproto_thread->shutdown_ready) &&
+ 	    iproto_is_thread_shutdown_ready(con->iproto_thread))
+ 		ev_async_send(tx_binary.loop, &con->iproto_thread->shutdown_ready);
+}
+
+/**
+ * mempool_free(&iproto_thread->iproto_msg_pool, msg) wrapper for detecting the
+ * moment when the last message in @a iproto_thread was freed during shutdown
+ * process.
+ */
+static inline void
+iproto_msg_free(struct iproto_thread *iproto_thread, struct iproto_msg *msg)
+{
+	mempool_free(&iproto_thread->iproto_msg_pool, msg);
+	if (ev_is_active(&iproto_thread->shutdown_ready) &&
+		iproto_is_thread_shutdown_ready(iproto_thread))
+		ev_async_send(tx_binary.loop, &iproto_thread->shutdown_ready);
+}
+
 static inline void
 iproto_msg_delete(struct iproto_msg *msg)
 {
 	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
-	mempool_free(&msg->connection->iproto_thread->iproto_msg_pool, msg);
+	iproto_msg_free(msg->connection->iproto_thread, msg);
 	iproto_resume(iproto_thread);
 }
 
@@ -583,7 +680,7 @@ iproto_msg_new(struct iproto_connection *con)
 	struct iproto_msg *msg =
 		(struct iproto_msg *) mempool_alloc(iproto_msg_pool);
 	ERROR_INJECT(ERRINJ_TESTING, {
-		mempool_free(&con->iproto_thread->iproto_msg_pool, msg);
+		iproto_msg_free(con->iproto_thread, msg);
 		msg = NULL;
 	});
 	if (msg == NULL) {
@@ -670,6 +767,15 @@ iproto_connection_try_to_start_destroy(struct iproto_connection *con)
 		con->state = IPROTO_CONNECTION_PENDING_DESTROY;
 		return;
 	}
+	/*
+	 * If shutdown process started, part of iproto_connection struct
+	 * used there, so freeing of connection will lead to UB. Let shutdown
+	 * process destroy the connection.
+	 */
+	if (con->iproto_thread->is_shutdown_active &&
+	    !rlist_empty(&con->in_all_list))
+		return;
+	rlist_del(&con->in_all_list);
 	/*
 	 * If the connection has no outstanding requests in the
 	 * input buffer, then no one (e.g. tx thread) is referring
@@ -1121,6 +1227,16 @@ iproto_connection_on_output(ev_loop *loop, struct ev_io *watcher,
 	}
 }
 
+static void
+iproto_connection_on_shutdown(ev_loop *loop, struct ev_async *watcher,
+			      int /* revents */)
+{
+	struct iproto_connection *con = (struct iproto_connection *) watcher->data;
+	ev_async_stop(loop, &con->after_shutdown);
+	rlist_del(&con->in_all_list);
+	iproto_connection_close(con);
+}
+
 static struct iproto_connection *
 iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 {
@@ -1131,10 +1247,11 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 		return NULL;
 	}
 	con->iproto_thread = iproto_thread;
-	con->input.data = con->output.data = con;
+	con->input.data = con->output.data = con->after_shutdown.data = con;
 	con->loop = loop();
 	ev_io_init(&con->input, iproto_connection_on_input, fd, EV_READ);
 	ev_io_init(&con->output, iproto_connection_on_output, fd, EV_WRITE);
+	ev_async_init(&con->after_shutdown, iproto_connection_on_shutdown);
 	ibuf_create(&con->ibuf[0], cord_slab_cache(), iproto_readahead);
 	ibuf_create(&con->ibuf[1], cord_slab_cache(), iproto_readahead);
 	obuf_create(&con->obuf[0], &con->iproto_thread->net_slabc,
@@ -1148,7 +1265,11 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 	con->parse_size = 0;
 	con->long_poll_count = 0;
 	con->session = NULL;
+	con->graceful_shutdown = false;
+	con->graceful_shutdown_got = false;
+	con->socket_shutdown = false;
 	rlist_create(&con->in_stop_list);
+	rlist_create(&con->in_all_list);
 	/* It may be very awkward to allocate at close. */
 	cmsg_init(&con->destroy_msg, con->iproto_thread->destroy_route);
 	cmsg_init(&con->disconnect_msg, con->iproto_thread->disconnect_route);
@@ -1178,7 +1299,7 @@ iproto_connection_delete(struct iproto_connection *con)
 	       con->obuf[0].iov[0].iov_base == NULL);
 	assert(con->obuf[1].pos == 0 &&
 	       con->obuf[1].iov[0].iov_base == NULL);
-	mempool_free(&con->iproto_thread->iproto_connection_pool, con);
+	iproto_connection_free(con);
 }
 
 /* }}} iproto_connection */
@@ -1266,6 +1387,7 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 			goto error;
 		cmsg_init(&msg->base, iproto_thread->sql_route);
 		break;
+	case IPROTO_SHUTDOWN:
 	case IPROTO_PING:
 		cmsg_init(&msg->base, iproto_thread->misc_route);
 		break;
@@ -1681,6 +1803,11 @@ tx_process_misc(struct cmsg *m)
 			iproto_reply_ok_xc(out, msg->header.sync,
 					   ::schema_version);
 			break;
+		case IPROTO_SHUTDOWN:
+			con->session->graceful_shutdown = true;
+			iproto_reply_ok_xc(out, msg->header.sync,
+					   ::schema_version);
+			break;
 		case IPROTO_PING:
 			iproto_reply_ok_xc(out, msg->header.sync,
 					   ::schema_version);
@@ -1846,6 +1973,9 @@ tx_process_replication(struct cmsg *m)
 	}
 }
 
+static inline bool
+iproto_is_connection_shutdown_ready(struct iproto_connection *con);
+
 static void
 net_send_msg(struct cmsg *m)
 {
@@ -1867,6 +1997,12 @@ net_send_msg(struct cmsg *m)
 			ev_feed_event(con->loop, &con->output, EV_WRITE);
 	} else if (iproto_connection_is_idle(con)) {
 		iproto_connection_close(con);
+	}
+	if (msg->header.type == IPROTO_SHUTDOWN) {
+		con->graceful_shutdown_got = true;
+		if (iproto_is_connection_shutdown_ready(con))
+			ev_async_send(con->loop, &con->after_shutdown);
+		shutdown(con->input.fd, SHUT_RD);
 	}
 	iproto_msg_delete(msg);
 }
@@ -2015,9 +2151,11 @@ iproto_on_accept(struct evio_service *service, int fd,
 	 */
 	msg = iproto_msg_new(con);
 	if (msg == NULL) {
-		mempool_free(&con->iproto_thread->iproto_connection_pool, con);
+		iproto_connection_free(con);
 		return -1;
 	}
+	rlist_add_tail_entry(&iproto_thread->all_connections, con,
+			     in_all_list);
 	cmsg_init(&msg->base, iproto_thread->connect_route);
 	msg->p_ibuf = con->p_ibuf;
 	msg->wpos = con->wpos;
@@ -2159,6 +2297,132 @@ iproto_session_push(struct session *session, struct port *port)
 
 /** }}} */
 
+/**
+ * True if both conditions are true:
+ * 1) Client doesn't support graceful shutdown and happened
+ * shutdown(socket, SHUT_RD) on net-socket (if socket exists).
+ * 2) Client support graceful shutdown and got
+ * IPROTO_SHUTDOWN from client.
+ *
+ * UB if shutdown process is not started because graceful_shutdown field is
+ * not initialized.
+ */
+static inline bool
+iproto_is_connection_shutdown_ready(struct iproto_connection *con)
+{
+	assert(con->iproto_thread->is_shutdown_active);
+	return (con->graceful_shutdown && con->graceful_shutdown_got) ||
+	       (!con->graceful_shutdown && con->socket_shutdown);
+}
+
+/**
+ * Start shutdown process on given @a connection.
+ */
+static inline void
+iproto_start_connection_shutdown(struct iproto_connection *con)
+{
+	assert(con->iproto_thread->is_shutdown_active);
+	ev_async_start(con->loop, &con->after_shutdown);
+	cmsg_init(&con->shutdown_msg, con->iproto_thread->shutdown_route);
+	cpipe_push(&con->iproto_thread->tx_pipe, &con->shutdown_msg);
+	cpipe_flush_input(&con->iproto_thread->tx_pipe);
+}
+
+/**
+ * Choose the way for shutdown process depending on whether the connection
+ * supports graceful shutdown shutdown or not.
+ */
+static void
+tx_start_shutdown(struct cmsg *m)
+{
+	struct iproto_connection *con =
+		container_of(m, struct iproto_connection, shutdown_msg);
+	struct cpipe *net_pipe = &con->iproto_thread->net_pipe;
+	if (con->session && con->session->graceful_shutdown) {
+		cpipe_push(net_pipe, &con->graceful_shutdown_msg);
+	} else {
+		cmsg_init(&con->not_graceful_shutdown_msg,
+			  con->iproto_thread->not_graceful_shutdown_route);
+		cpipe_push(net_pipe, &con->not_graceful_shutdown_msg);
+	}
+	cpipe_flush_input(net_pipe);
+}
+
+/**
+ * Send IPROTO_SHUTDOWN to a remote client.
+ */
+static void
+net_send_shutdown(struct cmsg *m)
+{
+	struct iproto_connection *con =
+		container_of(m, struct iproto_connection, shutdown_msg);
+	assert(con->iproto_thread->is_shutdown_active);
+	con->graceful_shutdown = true;
+	iproto_reply_shutdown(con->tx.p_obuf, ::schema_version);
+	if (!con->tx.is_push_sent)
+		tx_begin_push(con);
+	else
+		con->tx.is_push_pending = true;
+	if (iproto_is_connection_shutdown_ready(con))
+		ev_async_send(con->loop, &con->after_shutdown);
+}
+
+/**
+ * Read input socket of connection until iproto packet boundary or until
+ * msg_max_limit is reached and shutdown(con, SHUT_RD).
+ */
+static void
+net_shutdown_socket(struct cmsg *m)
+{
+	struct iproto_connection *con =
+		container_of(m, struct iproto_connection, shutdown_msg);
+	assert(con->iproto_thread->is_shutdown_active);
+	con->graceful_shutdown = false;
+	int fd = con->input.fd;
+	if (fd < 0)
+		return;
+	try {
+		iproto_resume(con->iproto_thread);
+		/* Read input while input exists and msg_max_limit isn't
+		 * reached.
+		 */
+		while (rlist_empty(&con->in_stop_list)) {
+			if (iproto_check_msg_max(con->iproto_thread))
+				break;
+			/* Ensure we have sufficient space for the read.  */
+			struct ibuf *in = iproto_connection_input_buffer(con);
+			if (in == NULL)
+				break;
+			/* Read input. */
+			int nrd = sio_read(fd, in->wpos, ibuf_unused(in));
+			if (nrd < 0 && !sio_wouldblock(errno))
+				diag_raise();
+			if (nrd <= 0)
+				break;
+			/* Count statistics */
+			rmean_collect(con->iproto_thread->rmean,
+				      IPROTO_RECEIVED, nrd);
+
+			/* Update the read position and connection state. */
+			in->wpos += nrd;
+			con->parse_size += nrd;
+			/* Enqueue all requests which are fully read up. */
+			if (iproto_enqueue_batch(con, in) != 0)
+				diag_raise();
+		}
+	} catch (Exception *e) {
+		iproto_write_error(fd, e, ::schema_version, 0);
+		e->log();
+	}
+	shutdown(fd, SHUT_RD);
+	/**
+	* Notify session about end of read from socket.
+	*/
+	con->socket_shutdown = true;
+	if (iproto_is_connection_shutdown_ready(con))
+		ev_async_send(con->loop, &con->after_shutdown);
+}
+
 static inline void
 iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 {
@@ -2170,6 +2434,12 @@ iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 		{ tx_process_disconnect, &iproto_thread->net_pipe };
 	iproto_thread->disconnect_route[1] =
 		{ net_finish_disconnect, NULL };
+	iproto_thread->shutdown_route[0] =
+		{ tx_start_shutdown, NULL };
+	iproto_thread->graceful_shutdown_route[0] =
+		{ net_send_shutdown, NULL };
+	iproto_thread->not_graceful_shutdown_route[0] =
+		{ net_shutdown_socket, NULL };
 	iproto_thread->misc_route[0] =
 		{ tx_process_misc, &iproto_thread->net_pipe };
 	iproto_thread->misc_route[1] = { net_send_msg, NULL };
@@ -2230,6 +2500,15 @@ iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 	iproto_thread->connect_route[1] = { net_send_greeting, NULL };
 };
 
+static void
+iproto_on_thread_shutdown(ev_loop *loop, struct ev_async *watcher,
+			  int /* revents */)
+{
+	struct iproto_thread *iproto_thread = (struct iproto_thread *)watcher->data;
+	ev_async_stop(loop, &iproto_thread->shutdown_ready);
+	fiber_cond_broadcast(&iproto_thread->shutdown_cond);
+}
+
 static inline int
 iproto_thread_init(struct iproto_thread *iproto_thread)
 {
@@ -2243,7 +2522,21 @@ iproto_thread_init(struct iproto_thread *iproto_thread)
 			  "rmean_new", "struct rmean");
 		return -1;
 	}
+	iproto_thread->is_shutdown_active = false;
+	fiber_cond_create(&iproto_thread->shutdown_cond);
+	ev_async_init(&iproto_thread->shutdown_ready, iproto_on_thread_shutdown);
+	return 0;
+}
 
+void
+iproto_start_shutdown();
+
+static int
+graceful_shutdown_trigger(void* arg) {
+	(void) arg;
+	iproto_start_shutdown();
+		for(int i = 0; i < iproto_threads_count; ++i)
+			fiber_cond_wait(&iproto_threads[i].shutdown_cond);
 	return 0;
 }
 
@@ -2257,6 +2550,10 @@ iproto_init(int threads_count)
 		/* .fd = */ iproto_session_fd,
 		/* .sync = */ iproto_session_sync,
 	};
+
+	if (box_on_shutdown(NULL, graceful_shutdown_trigger, NULL) != 0)
+		panic("failed to register iproto shutdown function");
+
 	/*
 	 * We use this tx_binary only for bind, not for listen, so
 	 * we don't need any accept functions.
@@ -2287,6 +2584,9 @@ iproto_init(int threads_count)
 		iproto_thread->stopped_connections =
 			RLIST_HEAD_INITIALIZER(iproto_thread->
 					       stopped_connections);
+		iproto_thread->all_connections =
+			RLIST_HEAD_INITIALIZER(iproto_thread->
+					       all_connections);
 		char endpoint_name[ENDPOINT_NAME_MAX];
 		snprintf(endpoint_name, ENDPOINT_NAME_MAX, "net%u",
 			 iproto_thread->id);
@@ -2323,6 +2623,14 @@ enum iproto_cfg_op {
 	 * Command code do get statistic from iproto thread
 	 */
 	IPROTO_CFG_STAT,
+	/**
+	 * Command code to get shutdown status from iproto thread
+	 */
+	IPROTO_CFG_SHUTDOWN_STAT,
+	/**
+	 * Command code to start shutdown process on iproto thread
+	 */
+	IPROTO_CFG_SHUTDOWN_START,
 };
 
 /**
@@ -2347,6 +2655,9 @@ struct iproto_cfg_msg: public cbus_call_msg
 
 		/** New iproto max message count. */
 		int iproto_msg_max;
+
+		/** Shutdown status. */
+		bool is_shutdown_active;
 	};
 	struct iproto_thread *iproto_thread;
 };
@@ -2382,6 +2693,24 @@ iproto_fill_stat(struct iproto_thread *iproto_thread,
 		mempool_count(&iproto_thread->iproto_msg_pool);
 }
 
+static void
+iproto_thread_shutdown(struct iproto_thread *iproto_thread)
+{
+	if (evio_service_is_active(&iproto_thread->binary))
+		evio_service_stop(&iproto_thread->binary);
+	/**
+	 * Check, that iproto_thread have to close connections or wait for requests.
+	 */
+	if (iproto_is_thread_shutdown_ready(iproto_thread))
+		return;
+	ev_async_start(loop(), &iproto_thread->shutdown_ready);
+	struct iproto_connection *con;
+	iproto_thread->is_shutdown_active = true;
+	rlist_foreach_entry(con, &iproto_thread->all_connections, in_all_list) {
+		iproto_start_connection_shutdown(con);
+	}
+}
+
 static int
 iproto_do_cfg_f(struct cbus_call_msg *m)
 {
@@ -2414,6 +2743,13 @@ iproto_do_cfg_f(struct cbus_call_msg *m)
 			break;
 		case IPROTO_CFG_STAT:
 			iproto_fill_stat(iproto_thread, cfg_msg);
+			break;
+		case IPROTO_CFG_SHUTDOWN_STAT:
+			cfg_msg->is_shutdown_active =
+				iproto_thread->is_shutdown_active;
+			break;
+		case IPROTO_CFG_SHUTDOWN_START:
+			iproto_thread_shutdown(iproto_thread);
 			break;
 		default:
 			unreachable();
@@ -2549,6 +2885,30 @@ iproto_reset_stat(void)
 {
 	for (int i = 0; i < iproto_threads_count; i++)
 		rmean_cleanup(iproto_threads[i].rmean);
+}
+
+bool
+iproto_is_shutdown_active(struct session *session)
+{
+	struct iproto_connection *con =
+		(struct iproto_connection *)session->meta.connection;
+	if (con != NULL) {
+		struct iproto_cfg_msg cfg_msg;
+		iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_SHUTDOWN_STAT);
+		iproto_do_cfg(con->iproto_thread, &cfg_msg);
+		return cfg_msg.is_shutdown_active;
+	}
+	return false;
+}
+
+void
+iproto_start_shutdown()
+{
+	struct iproto_cfg_msg cfg_msg;
+	iproto_cfg_msg_create(&cfg_msg, IPROTO_CFG_SHUTDOWN_START);
+	for (int i = 0; i < iproto_threads_count; i++) {
+		iproto_do_cfg(&iproto_threads[i], &cfg_msg);
+	}
 }
 
 void
