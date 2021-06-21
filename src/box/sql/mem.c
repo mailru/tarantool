@@ -86,8 +86,20 @@ mem_str(const struct Mem *mem)
 	case MEM_TYPE_DOUBLE:
 		sql_snprintf(BUF_SIZE, &buf[0], "%!.15g", mem->u.r);
 		return tt_sprintf("%s", buf);
-	case MEM_TYPE_BIN:
-		return "varbinary";
+	case MEM_TYPE_BIN: {
+		uint32_t svp = region_used(&fiber()->gc);
+		char *str = region_alloc(&fiber()->gc, mem->n * 2 + 1);
+		for (int i = 0; i < mem->n; ++i) {
+			int n = (mem->z[i] & 0xF0) >> 4;
+			str[2 * i] = n < 10 ? ('0' + n) : ('A' + n - 10);
+			n = (mem->z[i] & 0x0F);
+			str[2 * i + 1] = n < 10 ? ('0' + n) : ('A' + n - 10);
+		}
+		str[2 * mem->n] = '\0';
+		const char *res = tt_sprintf("x'%s'", str);
+		region_truncate(&fiber()->gc, svp);
+		return res;
+	}
 	case MEM_TYPE_MAP:
 	case MEM_TYPE_ARRAY:
 		return mp_str(mem->z);

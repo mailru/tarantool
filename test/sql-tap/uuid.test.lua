@@ -697,7 +697,7 @@ test:do_catchsql_test(
     [[
         SELECT cast(randomblob(10) as UUID) FROM t2 LIMIT 1;
     ]], {
-        1, "Type mismatch: can not convert varbinary to uuid"
+        1, "Type mismatch: can not convert x'819192E578DE3FA24AF3' to uuid"
     })
 
 test:execsql([[
@@ -858,7 +858,7 @@ test:do_catchsql_test(
     [[
         INSERT INTO tsu VALUES ('8_varbinary', randomblob(10));
     ]], {
-        1, "Type mismatch: can not convert varbinary to uuid"
+        1, "Type mismatch: can not convert x'733CA8769291A0FEE366' to uuid"
     })
 
 test:execsql([[

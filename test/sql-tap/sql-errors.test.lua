@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 local test = require("sqltester")
-test:plan(72)
+test:plan(74)
 
 test:execsql([[
 	CREATE TABLE t0 (i INT PRIMARY KEY, a INT);
@@ -687,7 +687,7 @@ test:do_catchsql_test(
 		-- </sql-errors-1.63>
 	})
 
--- gh-4356: Make sure that 'varbinary' is printed instead of the
+-- gh-4356: Make sure that varbinary is printed in hex instead of the
 -- binary data itself (since binary data can contain unprintable symbols).
 --
 test:do_catchsql_test(
@@ -696,7 +696,7 @@ test:do_catchsql_test(
 		SELECT X'ff' + 1;
 	]], {
 		-- <sql-errors-2.1>
-		1, "Type mismatch: can not convert varbinary to numeric"
+		1, "Type mismatch: can not convert x'FF' to numeric"
 		-- </sql-errors-2.1>
 	})
 
@@ -706,7 +706,7 @@ test:do_catchsql_test(
 		SELECT X'ff' - 1;
 	]], {
 		-- <sql-errors-2.2>
-		1, "Type mismatch: can not convert varbinary to numeric"
+		1, "Type mismatch: can not convert x'FF' to numeric"
 		-- </sql-errors-2.2>
 	})
 
@@ -716,7 +716,7 @@ test:do_catchsql_test(
 		SELECT X'ff' * 1;
 	]], {
 		-- <sql-errors-2.3>
-		1, "Type mismatch: can not convert varbinary to numeric"
+		1, "Type mismatch: can not convert x'FF' to numeric"
 		-- </sql-errors-2.3>
 	})
 
@@ -726,7 +726,7 @@ test:do_catchsql_test(
 		SELECT X'ff' / 1;
 	]], {
 		-- <sql-errors-2.4>
-		1, "Type mismatch: can not convert varbinary to numeric"
+		1, "Type mismatch: can not convert x'FF' to numeric"
 		-- </sql-errors-2.4>
 	})
 
@@ -736,7 +736,7 @@ test:do_catchsql_test(
 		SELECT X'ff' AND true;
 	]], {
 		-- <sql-errors-2.5>
-		1, "Type mismatch: can not convert varbinary to boolean"
+		1, "Type mismatch: can not convert x'FF' to boolean"
 		-- </sql-errors-2.5>
 	})
 
@@ -746,7 +746,7 @@ test:do_catchsql_test(
 		SELECT X'ff' OR false;
 	]], {
 		-- <sql-errors-2.6>
-		1, "Type mismatch: can not convert varbinary to boolean"
+		1, "Type mismatch: can not convert x'FF' to boolean"
 		-- </sql-errors-2.6>
 	})
 
@@ -756,7 +756,7 @@ test:do_catchsql_test(
 		SELECT false OR X'ff';
 	]], {
 		-- <sql-errors-2.7>
-		1, "Type mismatch: can not convert varbinary to boolean"
+		1, "Type mismatch: can not convert x'FF' to boolean"
 		-- </sql-errors-2.7>
 	})
 
@@ -779,5 +779,29 @@ test:do_catchsql_test(
 		1, "Type mismatch: can not convert varbinary to boolean"
 		-- </sql-errors-2.9>
 	})
+
+test:do_catchsql_test(
+	"sql-errors-2.10",
+	[[
+		SELECT CAST(x'F1' AS UNSIGNED);
+	]], {
+		-- <sql-errors-2.1>
+		1, "Type mismatch: can not convert x'F1' to unsigned"
+		-- </sql-errors-2.1>
+	})
+
+test:execsql('CREATE TABLE test (i INT PRIMARY KEY);')
+
+test:do_catchsql_test(
+	"sql-errors-2.12",
+	[[
+		INSERT INTO test VALUES(x'F1');
+	]], {
+		-- <sql-errors-2.1>
+		1, "Type mismatch: can not convert x'F1' to integer"
+		-- </sql-errors-2.1>
+	})
+
+test:execsql('DROP TABLE test;')
 
 test:finish_test()
