@@ -115,6 +115,9 @@ local method_encoder = {
     min     = internal.encode_select,
     max     = internal.encode_select,
     count   = internal.encode_call,
+    begin   = internal.encode_begin,
+    commit  = internal.encode_commit,
+    rollback = internal.encode_rollback,
     -- inject raw data into connection, used by console and tests
     inject = function(buf, id, bytes) -- luacheck: no unused args
         local ptr = buf:reserve(#bytes)
@@ -143,6 +146,9 @@ local method_decoder = {
     count   = decode_count,
     inject  = decode_data,
     push    = decode_push,
+    begin   = decode_nil,
+    commit  = decode_nil,
+    rollback = decode_nil,
 }
 
 local function decode_error(raw_data)
@@ -1210,6 +1216,30 @@ function remote_methods:stream(stream_id)
 
     prepare_stream_spaces_and_indices(self, stream, stream_id)
 
+    function stream:begin(opts)
+        check_remote_arg(self, 'begin')
+        local res = self:_request('begin', opts, nil, self._stream_id)
+        if type(res) ~= 'table' or opts and opts.is_async then
+            return nothing_or_data(res)
+        end
+        return unpack(res)
+    end
+    function stream:commit(opts)
+        check_remote_arg(self, 'commit')
+        local res = self:_request('commit', opts, nil, self._stream_id)
+        if type(res) ~= 'table' or opts and opts.is_async then
+            return nothing_or_data(res)
+        end
+        return unpack(res)
+    end
+    function stream:rollback(opts)
+        check_remote_arg(self, 'rollback')
+        local res = self:_request('rollback', opts, nil, self._stream_id)
+        if type(res) ~= 'table' or opts and opts.is_async then
+            return nothing_or_data(res)
+        end
+        return unpack(res)
+    end
     function stream:reload_schema()
         check_remote_arg(self, 'reload_schema')
         return self._connection:reload_schema()
