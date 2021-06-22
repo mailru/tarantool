@@ -581,8 +581,12 @@ lbox_info_sql(struct lua_State *L)
 static int
 lbox_info_listen(struct lua_State *L)
 {
-	/* NULL is ok, no need to check. */
-	char addrbuf[SERVICE_NAME_MAXLEN];
+	/**
+	 * NULL is ok, no need to check.
+	 * We need `+ 2` bytes for each listening address, for `, `
+	 * delimiter between them.
+	 */
+	char addrbuf[(SERVICE_NAME_MAXLEN + 2) * IPROTO_LISTEN_SOCKET_MAX];
 	lua_pushstring(L, iproto_bound_address(addrbuf));
 	return 1;
 }

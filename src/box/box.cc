@@ -1707,8 +1707,12 @@ promote:
 int
 box_listen(void)
 {
+	const char *uri_array[1];
 	const char *uri = cfg_gets("listen");
-	if (box_check_uri(uri, "listen") != 0 || iproto_listen(uri) != 0)
+	if (box_check_uri(uri, "listen") != 0)
+		return -1;
+	uri_array[0] = uri;
+	if (iproto_listen(uri_array, (uri != NULL ? 1 : 0)) != 0)
 		return -1;
 	return 0;
 }
