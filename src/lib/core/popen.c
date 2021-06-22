@@ -893,6 +893,7 @@ make_pipe(int pfd[2])
 static int
 close_inherited_fds(int *skip_fds, size_t nr_skip_fds)
 {
+	//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 # if defined(TARGET_OS_LINUX)
 	static const char path[] = "/proc/self/fd";
 # else
@@ -905,12 +906,22 @@ close_inherited_fds(int *skip_fds, size_t nr_skip_fds)
 
 	dir = opendir(path);
 	if (!dir) {
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		diag_set(SystemError, "fdin: Can't open %s", path);
 		return -1;
 	}
+	//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 	fd_dir = dirfd(dir);
 
+	/*static */unsigned counter = 0;//TO_REMOVE
+	static unsigned max_counter = 0;//TO_REMOVE
+	//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 	for (de = readdir(dir); de; de = readdir(dir)) {
+		if (++counter > 10000000) {//TO_REMOVE
+			fprintf(stderr, "%s(): line %d counter=%u\n", __func__, __LINE__, counter);//TO_REMOVE
+			*(volatile int *)0 = 0;
+		}
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (!strcmp(de->d_name, ".") ||
 		    !strcmp(de->d_name, ".."))
 			continue;
@@ -920,32 +931,46 @@ close_inherited_fds(int *skip_fds, size_t nr_skip_fds)
 		if (fd_no == fd_dir)
 			continue;
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		/* We don't expect many numbers here */
 		for (i = 0; i < nr_skip_fds; i++) {
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 			if (fd_no == skip_fds[i]) {
+				//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 				fd_no = -1;
 				break;
 			}
 		}
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (fd_no == -1)
 			continue;
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		say_debug("popen: close inherited fd [%s:%d]",
 			  stdX_str(fd_no), fd_no);
 		if (close(fd_no)) {
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 			int saved_errno = errno;
 			diag_set(SystemError, "fdin: Can't close %d", fd_no);
 			closedir(dir);
 			errno = saved_errno;
 			return -1;
 		}
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
+	}
+	if (counter > max_counter) {//TO_REMOVE
+		max_counter = counter;
+		fprintf(stderr, "%s(): line %d new max_counter=%u\n", __func__, __LINE__, max_counter);//TO_REMOVE
 	}
 
+	//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 	if (closedir(dir)) {
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		diag_set(SystemError, "fdin: Can't close %s", path);
 		return -1;
 	}
+	//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 	return 0;
 }
 
@@ -1181,11 +1206,14 @@ popen_new(struct popen_opts *opts)
 	 * vfork to complete. Also we try to do as minimum
 	 * operations before the exec() as possible.
 	 */
+	fprintf(stderr, "%s(): before vfork()\n", __func__);//TO_REMOVE
 	handle->pid = vfork();
 	if (handle->pid < 0) {
+		fprintf(stderr, "%s(): vfork() failed\n", __func__);//TO_REMOVE
 		diag_set(SystemError, "vfork() fails");
 		goto out_err;
 	} else if (handle->pid == 0) {
+		//fprintf(stderr, "%s(): vfork() child\n", __func__);//TO_REMOVE
 		/*
 		 * The documentation for libev says that
 		 * each new fork should call ev_loop_fork(EV_DEFAULT)
@@ -1207,6 +1235,7 @@ popen_new(struct popen_opts *opts)
 		 * capture our debug logs as stderr of the child
 		 * process.
 		 */
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (log_fd >= 0)
 			log_set_fd(log_fd);
 
@@ -1215,16 +1244,21 @@ popen_new(struct popen_opts *opts)
 		 * to default inside a child process since we're
 		 * inheriting them from a caller process.
 		 */
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (opts->flags & POPEN_FLAG_RESTORE_SIGNALS)
 			signal_reset();
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (opts->flags & POPEN_FLAG_SETSID) {
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 #ifndef TARGET_OS_DARWIN
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 			if (setsid() == -1) {
 				say_syserror("child: setsid failed");
 				goto exit_child;
 			}
 #else
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 			/*
 			 * Note that on MacOS we're not allowed to
 			 * set sid after vfork (it is OS specific)
@@ -1236,6 +1270,7 @@ popen_new(struct popen_opts *opts)
 				close(ttyfd);
 			}
 
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 			if (setpgrp() == -1) {
 				say_syserror("child: setpgrp failed");
 				goto exit_child;
@@ -1243,15 +1278,22 @@ popen_new(struct popen_opts *opts)
 #endif
 		}
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (opts->flags & POPEN_FLAG_CLOSE_FDS) {
+			fprintf(stderr, "%s(): line %d POPEN_FLAG_CLOSE_FDS\n", __func__, __LINE__);//TO_REMOVE
 			if (close_inherited_fds(skip_fds, nr_skip_fds) != 0) {
+				//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 				diag_log();
 				say_syserror("child: close inherited fds");
 				goto exit_child;
 			}
+		} else {
+			fprintf(stderr, "%s(): line %d !POPEN_FLAG_CLOSE_FDS\n", __func__, __LINE__);//TO_REMOVE
 		}
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		for (i = 0; i < lengthof(pfd_map); i++) {
+			//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 			int fileno = pfd_map[i].fileno;
 			/*
 			 * Pass pipe peer to a child.
@@ -1273,6 +1315,7 @@ popen_new(struct popen_opts *opts)
 						     pfd[i][0], pfd[i][1]);
 					goto exit_child;
 				}
+				//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 				continue;
 			}
 
@@ -1310,6 +1353,7 @@ popen_new(struct popen_opts *opts)
 			 */
 		}
 
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (close(dev_null_fd_ro) || close(dev_null_fd_wr)) {
 			say_error("child: can't close %d or %d",
 				  dev_null_fd_ro, dev_null_fd_wr);
@@ -1321,18 +1365,27 @@ popen_new(struct popen_opts *opts)
 		 * same virtual memory address space as the
 		 * parent.
 		 */
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (log_fd >= 0)
 			log_set_fd(old_log_fd);
 
-		if (opts->flags & POPEN_FLAG_SHELL)
+		//fprintf(stderr, "%s(): line %d\n", __func__, __LINE__);//TO_REMOVE
+		if (opts->flags & POPEN_FLAG_SHELL) {
+			//fprintf(stderr, "%s(): (shell) before execve(\"%s\" \"%s\")\n", __func__, _PATH_BSHELL, opts->argv[0]);//TO_REMOVE
 			execve(_PATH_BSHELL, opts->argv, envp);
-		else
+		} else {
+			//fprintf(stderr, "%s(): (not shell) before execve(\"%s\" \"%s\")\n", __func__, opts->argv[0], opts->argv[0]);//TO_REMOVE
 			execve(opts->argv[0], opts->argv, envp);
+		}
+		fprintf(stderr, "%s(): after execve()\n", __func__);//TO_REMOVE
 exit_child:
+		fprintf(stderr, "%s(): exit_child line %d\n", __func__, __LINE__);//TO_REMOVE
 		if (log_fd >= 0)
 			log_set_fd(old_log_fd);
 		_exit(errno);
 		unreachable();
+	} else {
+		fprintf(stderr, "%s(): vfork() parent\n", __func__);//TO_REMOVE
 	}
 
 	for (i = 0; i < lengthof(pfd_map); i++) {
