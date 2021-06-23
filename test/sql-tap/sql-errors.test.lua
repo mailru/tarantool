@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 local test = require("sqltester")
-test:plan(74)
+test:plan(76)
 
 test:execsql([[
 	CREATE TABLE t0 (i INT PRIMARY KEY, a INT);
@@ -766,7 +766,7 @@ test:do_catchsql_test(
 		SELECT X'ff' >= false;
 	]], {
 		-- <sql-errors-2.8>
-		1, "Type mismatch: can not convert varbinary to boolean"
+		1, "Type mismatch: can not convert x'FF' to boolean"
 		-- </sql-errors-2.8>
 	})
 
@@ -776,7 +776,7 @@ test:do_catchsql_test(
 		SELECT X'ff' <= false;
 	]], {
 		-- <sql-errors-2.9>
-		1, "Type mismatch: can not convert varbinary to boolean"
+		1, "Type mismatch: can not convert x'FF' to boolean"
 		-- </sql-errors-2.9>
 	})
 
@@ -802,6 +802,29 @@ test:do_catchsql_test(
 		-- </sql-errors-2.1>
 	})
 
+test:execsql('INSERT INTO test VALUES(1);')
+
+test:do_catchsql_test(
+	"sql-errors-2.13",
+	[[
+		SELECT i > false FROM test;
+	]], {
+		-- <sql-errors-2.1>
+		1, "Type mismatch: can not convert 1 to boolean"
+		-- </sql-errors-2.1>
+	})
+
 test:execsql('DROP TABLE test;')
+
+
+test:do_catchsql_test(
+	"sql-errors-2.14",
+	[[
+		SELECT 1.5 > x'1234';
+	]], {
+		-- <sql-errors-2.1>
+		1, "Type mismatch: can not convert 1.5 to varbinary"
+		-- </sql-errors-2.1>
+	})
 
 test:finish_test()

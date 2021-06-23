@@ -138,12 +138,12 @@ INSERT INTO ts(s) VALUES ('abc'), (12.5);
 SELECT s FROM ts WHERE s = true;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT s FROM ts WHERE s < true;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT s FROM ts WHERE s IN (true, 1, 'abcd');
  | ---
@@ -3371,493 +3371,493 @@ SELECT a2, b, b >> a2 FROM t6, t7;
 SELECT true > 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT false > 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT true < 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT false < 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 > true;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 > false;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 < true;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 < false;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 
 SELECT a1, a1 > 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, a1 < 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, 2 > a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, 2 < a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, a2 > 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, a2 < 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, 2 > a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, 2 < a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 
 SELECT b, true > b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, false > b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, true < b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, false < b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b > true FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b > false FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b < true FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b < false FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 
 SELECT a1, b, a1 > b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, a1 < b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, b > a1 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, b < a1 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, a2 > b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, a2 < b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, b > a2 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, b < a2 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 
 SELECT true >= 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT false >= 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT true <= 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT false <= 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 >= true;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 >= false;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 <= true;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 <= false;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 
 SELECT a1, a1 >= 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, a1 <= 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, 2 >= a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, 2 <= a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, a2 >= 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, a2 <= 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, 2 >= a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, 2 <= a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 
 SELECT b, true >= b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, false >= b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, true <= b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, false <= b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b >= true FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b >= false FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b <= true FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b <= false FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 
 SELECT a1, b, a1 >= b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, a1 <= b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, b >= a1 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, b <= a1 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, a2 >= b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, a2 <= b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, b >= a2 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, b <= a2 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 
 SELECT true == 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT false == 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT true != 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT false != 2;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 == true;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 == false;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 != true;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT 2 != false;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 
 SELECT a1, a1 == 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, a1 != 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, 2 == a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a1, 2 != a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, a2 == 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, a2 != 2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, 2 == a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 SELECT a2, 2 != a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 2 to boolean'
  | ...
 
 SELECT b, true == b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, false == b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, true != b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, false != b FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b == true FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b == false FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b != true FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT b, b != false FROM t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 
 SELECT a1, b, a1 == b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, a1 != b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, b == a1 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a1, b, b != a1 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, a2 == b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, a2 != b FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, b == a2 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 SELECT a2, b, b != a2 FROM t6, t7;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 123 to boolean'
  | ...
 
 SELECT true IN (0, 1, 2, 3);
@@ -3901,22 +3901,22 @@ SELECT a1, a1 IN (0, 1, 2, 3) FROM t6
 SELECT true BETWEEN 0 and 10;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 0 to boolean'
  | ...
 SELECT false BETWEEN 0 and 10;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 0 to boolean'
  | ...
 SELECT a1, a1 BETWEEN 0 and 10 FROM t6;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 0 to boolean'
  | ...
 SELECT a2, a2 BETWEEN 0 and 10 FROM t6;
  | ---
  | - null
- | - 'Type mismatch: can not convert unsigned to boolean'
+ | - 'Type mismatch: can not convert 0 to boolean'
  | ...
 
 -- Check interaction of BOOLEAN and NUMBER.
@@ -4516,493 +4516,493 @@ SELECT a2, c, c % a2 FROM t6, t8;
 SELECT true > 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT false > 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT true < 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT false < 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 > true;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 > false;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 < true;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 < false;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 
 SELECT a1, a1 > 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, a1 < 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, 2.3 > a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, 2.3 < a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, a2 > 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, a2 < 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, 2.3 > a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, 2.3 < a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 
 SELECT c, true > c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, false > c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, true < c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, false < c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c > true FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c > false FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c < true FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c < false FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 
 SELECT a1, c, a1 > c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, a1 < c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, c > a1 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, c < a1 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, a2 > c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, a2 < c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, c > a2 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, c < a2 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 
 SELECT true >= 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT false >= 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT true <= 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT false <= 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 >= true;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 >= false;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 <= true;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 <= false;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 
 SELECT a1, a1 >= 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, a1 <= 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, 2.3 >= a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, 2.3 <= a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, a2 >= 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, a2 <= 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, 2.3 >= a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, 2.3 <= a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 
 SELECT c, true >= c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, false >= c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, true <= c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, false <= c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c >= true FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c >= false FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c <= true FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c <= false FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 
 SELECT a1, c, a1 >= c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, a1 <= c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, c >= a1 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, c <= a1 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, a2 >= c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, a2 <= c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, c >= a2 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, c <= a2 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 
 SELECT true == 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT false == 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT true != 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT false != 2.3;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 == true;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 == false;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 != true;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT 2.3 != false;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 
 SELECT a1, a1 == 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, a1 != 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, 2.3 == a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a1, 2.3 != a1 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, a2 == 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, a2 != 2.3 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, 2.3 == a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 SELECT a2, 2.3 != a2 FROM t6
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 2.3 to boolean'
  | ...
 
 SELECT c, true == c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, false == c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, true != c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, false != c FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c == true FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c == false FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c != true FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT c, c != false FROM t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 
 SELECT a1, c, a1 == c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, a1 != c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, c == a1 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a1, c, c != a1 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, a2 == c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, a2 != c FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, c == a2 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 SELECT a2, c, c != a2 FROM t6, t8;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 4.56 to boolean'
  | ...
 
 SELECT true IN (0.1, 1.2, 2.3, 3.4);
@@ -5061,22 +5061,22 @@ SELECT a2 IN (SELECT c FROM t8) FROM t6 LIMIT 1;
 SELECT true BETWEEN 0.1 and 9.9;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 0.1 to boolean'
  | ...
 SELECT false BETWEEN 0.1 and 9.9;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 0.1 to boolean'
  | ...
 SELECT a1, a1 BETWEEN 0.1 and 9.9 FROM t6;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 0.1 to boolean'
  | ...
 SELECT a2, a2 BETWEEN 0.1 and 9.9 FROM t6;
  | ---
  | - null
- | - 'Type mismatch: can not convert real to boolean'
+ | - 'Type mismatch: can not convert 0.1 to boolean'
  | ...
 
 -- Check interaction of BOOLEAN and TEXT.
@@ -5272,124 +5272,124 @@ SELECT a2, d, d OR a2 FROM t6, t9;
 SELECT true > 'abc';
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT false > 'abc';
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT true < 'abc';
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT false < 'abc';
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT 'abc' > true;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT 'abc' > false;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT 'abc' < true;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 SELECT 'abc' < false;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert abc to boolean'
  | ...
 
 SELECT d, true > d FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, false > d FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, true < d FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, false < d FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, d > true FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, d > false FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, d < true FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT d, d < false FROM t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 
 SELECT a1, d, a1 > d FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a1, d, a1 < d FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a1, d, d > a1 FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a1, d, d < a1 FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a2, d, a2 > d FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a2, d, a2 < d FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a2, d, d > a2 FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 SELECT a2, d, d < a2 FROM t6, t9;
  | ---
  | - null
- | - 'Type mismatch: can not convert text to boolean'
+ | - 'Type mismatch: can not convert AsdF to boolean'
  | ...
 
 SELECT true || 'abc';

@@ -1102,7 +1102,7 @@ test:do_catchsql_test(
     [[
         SELECT u > 1 FROM t2;
     ]], {
-        1, "Type mismatch: can not convert unsigned to uuid"
+        1, "Type mismatch: can not convert 1 to uuid"
     })
 
 test:do_execsql_test(
@@ -1118,7 +1118,7 @@ test:do_catchsql_test(
     [[
         SELECT u > '1' FROM t2;
     ]], {
-        1, "Type mismatch: can not convert text to uuid"
+        1, "Type mismatch: can not convert 1 to uuid"
     })
 
 test:do_catchsql_test(
@@ -1126,7 +1126,7 @@ test:do_catchsql_test(
     [[
         SELECT u > 1.5 FROM t2;
     ]], {
-        1, "Type mismatch: can not convert real to uuid"
+        1, "Type mismatch: can not convert 1.5 to uuid"
     })
 
 test:do_catchsql_test(
@@ -1134,7 +1134,7 @@ test:do_catchsql_test(
     [[
         SELECT u > -1 FROM t2;
     ]], {
-        1, "Type mismatch: can not convert integer to uuid"
+        1, "Type mismatch: can not convert -1 to uuid"
     })
 
 test:do_catchsql_test(
@@ -1142,7 +1142,7 @@ test:do_catchsql_test(
     [[
         SELECT u > true FROM t2;
     ]], {
-        1, "Type mismatch: can not convert uuid to boolean"
+        1, "Type mismatch: can not convert 11111111-1111-1111-1111-111111111111 to boolean"
     })
 
 test:do_execsql_test(
@@ -1158,7 +1158,7 @@ test:do_catchsql_test(
     [[
         SELECT u > x'31' FROM t2;
     ]], {
-        1, "Type mismatch: can not convert varbinary to uuid"
+        1, "Type mismatch: can not convert x'31' to uuid"
     })
 
 test:do_catchsql_test(
@@ -1166,7 +1166,7 @@ test:do_catchsql_test(
     [[
         SELECT u = 1 FROM t2;
     ]], {
-        1, "Type mismatch: can not convert unsigned to uuid"
+        1, "Type mismatch: can not convert 1 to uuid"
     })
 
 test:do_execsql_test(
@@ -1182,7 +1182,7 @@ test:do_catchsql_test(
     [[
         SELECT u = '1' FROM t2;
     ]], {
-        1, "Type mismatch: can not convert text to uuid"
+        1, "Type mismatch: can not convert 1 to uuid"
     })
 
 test:do_catchsql_test(
@@ -1190,7 +1190,7 @@ test:do_catchsql_test(
     [[
         SELECT u = 1.5 FROM t2;
     ]], {
-        1, "Type mismatch: can not convert real to uuid"
+        1, "Type mismatch: can not convert 1.5 to uuid"
     })
 
 test:do_catchsql_test(
@@ -1198,7 +1198,7 @@ test:do_catchsql_test(
     [[
         SELECT u = -1 FROM t2;
     ]], {
-        1, "Type mismatch: can not convert integer to uuid"
+        1, "Type mismatch: can not convert -1 to uuid"
     })
 
 test:do_catchsql_test(
@@ -1206,7 +1206,7 @@ test:do_catchsql_test(
     [[
         SELECT u = true FROM t2;
     ]], {
-        1, "Type mismatch: can not convert uuid to boolean"
+        1, "Type mismatch: can not convert 11111111-1111-1111-1111-111111111111 to boolean"
     })
 
 test:do_execsql_test(
@@ -1222,7 +1222,7 @@ test:do_catchsql_test(
     [[
         SELECT u = x'31' FROM t2;
     ]], {
-        1, "Type mismatch: can not convert varbinary to uuid"
+        1, "Type mismatch: can not convert x'31' to uuid"
     })
 
 test:execsql([[

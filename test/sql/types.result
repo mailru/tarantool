@@ -349,12 +349,12 @@ box.execute("SELECT * FROM tboolean WHERE s1 = 'abc';")
 box.execute("SELECT * FROM tboolean WHERE s1 = 1;")
 ---
 - null
-- 'Type mismatch: can not convert unsigned to boolean'
+- 'Type mismatch: can not convert 1 to boolean'
 ...
 box.execute("SELECT * FROM tboolean WHERE s1 = 1.123;")
 ---
 - null
-- 'Type mismatch: can not convert real to boolean'
+- 'Type mismatch: can not convert 1.123 to boolean'
 ...
 box.space.TBOOLEAN:drop()
 ---
@@ -1240,17 +1240,17 @@ box.execute("INSERT INTO t VALUES(1, x'616263');")
 box.execute("SELECT * FROM t WHERE v = 1")
 ---
 - null
-- 'Type mismatch: can not convert unsigned to varbinary'
+- 'Type mismatch: can not convert 1 to varbinary'
 ...
 box.execute("SELECT * FROM t WHERE v = 1.123")
 ---
 - null
-- 'Type mismatch: can not convert real to varbinary'
+- 'Type mismatch: can not convert 1.123 to varbinary'
 ...
 box.execute("SELECT * FROM t WHERE v = 'str'")
 ---
 - null
-- 'Type mismatch: can not convert text to varbinary'
+- 'Type mismatch: can not convert str to varbinary'
 ...
 box.execute("SELECT * FROM t WHERE v = x'616263'")
 ---
