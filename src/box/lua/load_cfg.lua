@@ -142,7 +142,7 @@ local module_cfg_type = {
 -- forget to update it when add a new type or a combination of
 -- types here.
 local template_cfg = {
-    listen              = 'string, number',
+    listen              = 'string, number, table',
     memtx_memory        = 'number',
     strip_core          = 'boolean',
     memtx_min_tuple_size  = 'number',
@@ -234,9 +234,104 @@ local function normalize_uri_list(port_list)
     return result
 end
 
+local function str_split (inputstr, sep)
+    local t = {}
+    for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+        t[#t + 1] = str:gsub("^%s*(.-)%s*$", "%1")
+    end
+    return t
+end
+
+-- This function accepts URI option in table format
+-- and returns option in string format. For example:
+-- input { ["option"] = {"value1", "value2"} }
+-- output option=value1&option=value2
+local function normalize_uri_option(port, name)
+    local value = ""
+    assert(type(port) == 'table')
+    for i = 1, #port do
+        value = value .. name .. "=" .. port[i]
+        if i ~= #port then
+            value = value .. "&"
+        end
+    end
+    return value
+end
+
+-- This function accepts URI in table format.
+-- Table should contain at least "uri" value.
+-- Function converts a table to a string in
+-- expected format. For example:
+-- input { ["uri"] = "uri1", ["option1"] = "value1", ["option2"] = "value2" }
+-- output uri1?option1=value1&option2=value2
+local function normalize_uri_with_options(port)
+    if not port["uri"] then
+        box.error(box.error.CFG, 'listen', 'missing URI')
+    end
+    if type(port["uri"]) ~= 'string' then
+        box.error(box.error.CFG, 'listen', 'URI should be a string')
+    end
+    local value = port["uri"] .. "?"
+    for key, val in pairs(port) do
+        if type(key) ~= 'string' then
+            box.error(box.error.CFG, 'listen', 'passing URI in table format ' ..
+                      'requires a string key for each value')
+        end
+        if key ~= 'uri' then
+            if type(val) ~= 'table' then
+                val = str_split(val, ",;")
+            end
+            value = value .. normalize_uri_option(val, key) .. "&"
+        end
+    end
+    return value:sub(1, -2);
+end
+
+-- Function accepts table of URIs and its options.
+-- Keys in this table is numbers, each key corresponds
+-- to URI in string or in table format. For example:
+-- { "uri1", { ["uri"] = "uri2" } }. When we parse this
+-- table we check whether the value type is 'table' and
+-- if it is so we recursively call this function. For this
+-- nested tables keys should be strings ("uri" or options names).
+local function normalize_uris_with_options(port_list, result)
+    for key, val in pairs(port_list) do
+        if type(key) == 'string' then
+            table.insert(result, normalize_uri_with_options(port_list))
+            break
+        elseif type(key) == 'number' then
+            if type(val) == 'table' then
+                normalize_uris_with_options(val, result)
+            else
+                table.insert(result, normalize_uri(val))
+            end
+        else
+            box.error(box.error.CFG, 'listen', 'key in the URI table should have ' ..
+                      '\'string\' or \'number\' type')
+        end
+    end
+end
+
+-- URIs can be passed in multiple ways, for example as a string, as
+-- a table of strings or as a table of tables or as a combination of
+-- these options. This function accepts any of the previously listed
+-- input alternatives and returs table, which contain strings with
+-- one or several listening URIs separated by commas. For example:
+-- input { "uri1", { ["uri"] = "uri2"], ["option"] = "value" }, "uri3, uri4" }
+-- output {"uri1, "uri2?option=value", "uri3, uri4" }
+local function normalize_uris_with_options_list(port_list)
+    local result = {}
+    if type (port_list) ~= 'table' then
+        table.insert(result, normalize_uri(port_list))
+    else
+        normalize_uris_with_options(port_list, result)
+    end
+    return #result > 1 and result or (result[1] ~= "" and result[1] or nil)
+end
+
 -- options that require special handling
 local modify_cfg = {
-    listen             = normalize_uri,
+    listen             = normalize_uris_with_options_list,
     replication        = normalize_uri_list,
 }
 

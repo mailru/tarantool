@@ -87,6 +87,16 @@ enum {
 	IPROTO_THREADS_MAX = 1000,
 };
 
+enum uri_option_key {
+	URI_OPTION_KEY_TRANPORT = 0,
+	URI_OPTION_KEY_UNKNOWN
+};
+
+enum uri_option_value {
+	URI_TRANSPORT_OPTION_VALUE_PLAIN = 0,
+	URI_OPTION_VALUE_UNKNOWN
+};
+
 static char status[64] = "unknown";
 
 /** box.stat rmean */
@@ -681,6 +691,194 @@ box_check_uri(const char *source, const char *option_name)
 	return 0;
 }
 
+/**
+ * Check that string which contains one or several URIs with options
+ * does not start or end with one of the listed delimiters.
+ * URI should not contain delimiters, which are used to separate
+ * different URIs or URI and its options. This is important because
+ * `strtok` and `strtok_r` functions skip delimiters passed them as
+ * arguments. So if user passes some strange URI like `,/???` we won't
+ * be able to catch error, because `strtok_r` skips ',' and `?` symbols.
+ * @param source string containing one or seveal URIs with options.
+ *               It is supposed to be NULL-terminated.
+ */
+static inline int
+box_check_uri_delimiters(const char *source)
+{
+	static const char *uri_delimiters = ", ?=&;\0";
+	static const uint32_t uri_delimiters_size = 7;
+	size_t source_len = strlen(source);
+	source_len = (source_len != 0 ? source_len : source_len + 1);
+
+	for (uint32_t i = 0; i < uri_delimiters_size; i++) {
+		if (source[0] == uri_delimiters[i] ||
+		    source[source_len - 1] == uri_delimiters[i]) {
+			diag_set(ClientError, ER_CFG, "listen",
+				 "expected host:service or /unix.socket");
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static inline int
+box_check_end_of_token(const char *delimiter, char **saveptr,
+		       const char *error)
+{
+	if (strtok_r(NULL, delimiter, saveptr) != NULL) {
+		diag_set(ClientError, ER_CFG, "listen", error);
+		return -1;
+	}
+	return 0;
+}
+
+static inline enum uri_option_key
+parse_uri_option_key(const char *opt)
+{
+	if (strncmp(opt, "transport", strlen("transport")) == 0)
+		return URI_OPTION_KEY_TRANPORT;
+	return URI_OPTION_KEY_UNKNOWN;
+}
+
+
+static inline enum uri_option_value
+parse_uri_transport_option_value(const char *val)
+{
+	if (strncmp(val, "plain", strlen("plain")) == 0)
+		return URI_TRANSPORT_OPTION_VALUE_PLAIN;
+	return URI_OPTION_VALUE_UNKNOWN;
+}
+
+static inline int
+box_check_uri_option(const char *opt, const char *val)
+{
+	enum uri_option_key key = parse_uri_option_key(opt);
+	if (key == URI_OPTION_KEY_UNKNOWN) {
+		diag_set(ClientError, ER_CFG, "listen",
+			 tt_sprintf("invalid option `%s` for URI", opt));
+		return -1;
+	}
+	enum uri_option_value value = URI_OPTION_VALUE_UNKNOWN;
+	switch (key) {
+	case URI_OPTION_KEY_TRANPORT:
+		value = parse_uri_transport_option_value(val);
+		break;
+	/* key was checked before */
+	default:
+		unreachable();
+	}
+	if (value == URI_OPTION_VALUE_UNKNOWN) {
+		diag_set(ClientError, ER_CFG, "listen",
+			 tt_sprintf("invalid value `%s` for "
+				    "URI `%s` option", val, opt));
+		return -1;
+	}
+	return 0;
+}
+
+/**
+ * This function expects a string containing one or more URI options
+ * separated by "&". Each option must have a value separated by '='.
+ * Extra delimiters are ignored. "option1=value1&option2=valu2".
+ * Function continues the partitioning and checks started in function
+ * `box_check_uri_with_options`.
+ */
+static int
+box_check_uri_options(char *opts)
+{
+	static const char *error = "unable to parse URI options, extra `=`";
+	char *saveptr1, *saveptr2, *saveptr3;
+	for (char *optval = opts; opts != NULL; optval = NULL) {
+		char *optval_token = strtok_r(optval, "&", &saveptr1);
+		if (optval_token == NULL)
+			break;
+		char *opt = strtok_r(optval_token, "=", &saveptr2);
+		char *vals = strtok_r(NULL, "=", &saveptr2);
+		if (opt == NULL) {
+			diag_set(ClientError, ER_CFG, "listen",
+				 "invalid value `null` for URI option");
+			return -1;
+		}
+		if (vals == NULL) {
+			diag_set(ClientError, ER_CFG, "listen",
+				 tt_sprintf("invalid value `null` for URI "
+					    "`%s` option", opt));
+			return -1;
+		}
+		if (box_check_end_of_token("=", &saveptr2, error) != 0)
+			return -1;
+		for (char *val = vals; vals != NULL; val = NULL) {
+			char *val_token = strtok_r(val, ";", &saveptr3);
+			if (val_token == NULL)
+				break;
+			if (box_check_uri_option(opt, val_token) != 0)
+				return -1;
+		}
+	}
+	return 0;
+}
+
+/**
+ * This function expects a string containing one or more URI separated
+ * by commas. Each URI can contain options separated by '?'. Each option
+ * is separated from the next one by '&'. Extra delimiters are ignored.
+ * "uri1?option1=value1&option2=value2, uri2?option1=value1&option2=value2"
+ */
+static int
+box_check_uri_with_options(const char *source)
+{
+	int rc = 0;
+	char *uri_with_opts, *uri_with_opts_token;
+	char *saveptr1, *saveptr2;
+	static const char *uri_opt_error = "unable to parse URI options, extra `?`";
+
+	char *source_copy = strdup(source);
+	if (source_copy == NULL) {
+		diag_set(OutOfMemory, strlen(source) + 1,
+			 "strdup", "source");
+		return -1;
+	}
+
+	rc = box_check_uri_delimiters(source_copy);
+	if (rc != 0)
+		goto cleanup;
+
+	for (uri_with_opts = source_copy; ; uri_with_opts = NULL) {
+		uri_with_opts_token =
+			strtok_r(uri_with_opts, ", ", &saveptr1);
+		if (uri_with_opts_token == NULL)
+			break;
+		rc = box_check_uri_delimiters(uri_with_opts_token);
+		if (rc != 0)
+			goto cleanup;
+		char *uri = strtok_r(uri_with_opts_token, "?", &saveptr2);
+		char *opts = strtok_r(NULL, "?", &saveptr2);
+		rc = box_check_end_of_token("?", &saveptr2, uri_opt_error);
+		if (rc != 0)
+			goto cleanup;
+		if ((rc = box_check_uri(uri, "listen")) != 0)
+			goto cleanup;
+		if ((rc = box_check_uri_options(opts)) != 0)
+			goto cleanup;
+	}
+
+cleanup:
+	free(source_copy);
+	return rc;
+}
+
+static int
+box_check_listen(void)
+{
+	int count = cfg_getarr_size("listen");
+	for (int i = 0; i < count; i++) {
+		const char *source = cfg_getarr_elem("listen", i);
+		if (box_check_uri_with_options(source) != 0)
+			return -1;
+	}
+	return 0;
+}
+
 static enum election_mode
 box_check_election_mode(void)
 {
@@ -1136,7 +1334,7 @@ box_check_config(void)
 {
 	struct tt_uuid uuid;
 	box_check_say();
-	if (box_check_uri(cfg_gets("listen"), "listen") != 0)
+	if (box_check_listen() != 0)
 		diag_raise();
 	box_check_instance_uuid(&uuid);
 	box_check_replicaset_uuid(&uuid);
@@ -1707,14 +1905,61 @@ promote:
 int
 box_listen(void)
 {
-	const char *uri_array[1];
-	const char *uri = cfg_gets("listen");
-	if (box_check_uri(uri, "listen") != 0)
+	int uri_with_opts = 0, rc = 0;
+	char *uri_array[IPROTO_LISTEN_SOCKET_MAX];
+	char *uri_with_opts_array[IPROTO_LISTEN_SOCKET_MAX];
+	uint32_t uri_array_size = 0;
+
+	if (box_check_listen() != 0)
 		return -1;
-	uri_array[0] = uri;
-	if (iproto_listen(uri_array, (uri != NULL ? 1 : 0)) != 0)
-		return -1;
-	return 0;
+
+	int count = cfg_getarr_size("listen");
+	assert(count <= IPROTO_LISTEN_SOCKET_MAX);
+
+	for (uri_with_opts = 0; uri_with_opts < count; uri_with_opts++) {
+		const char *source = cfg_getarr_elem("listen", uri_with_opts);
+		char *source_copy = strdup(source);
+		if (source_copy == NULL) {
+			diag_set(OutOfMemory, strlen(source) + 1,
+				 "strdup", "source");
+			rc = -1;
+			goto cleanup;
+		}
+		uri_with_opts_array[uri_with_opts] = source_copy;
+		char *uri = strtok(source_copy, ", ");
+		while (uri != NULL) {
+			uri_array[uri_array_size++] = uri;
+			uri = strtok(NULL, ", ");
+		}
+		assert(uri_array_size <= IPROTO_LISTEN_SOCKET_MAX);
+	}
+
+	/*
+	 * At the moment, we ignore every listen options,
+	 * later this behaviour can be changed.
+	 */
+	for (unsigned i = 0; i < uri_array_size; i++)
+		uri_array[i] = strtok(uri_array[i], "?");
+
+	/*
+	 * Check that there is no same listen adresses in array.
+	 */
+	for (unsigned i = 0; i < uri_array_size; i++) {
+		for (unsigned j = i + 1; j < uri_array_size; j++) {
+			if (!strcmp(uri_array[i], uri_array[j])) {
+				diag_set(ClientError, ER_CFG, "listen",
+					 "duplicate listen URI");
+				rc = -1;
+				goto cleanup;
+			}
+		}
+	}
+
+	rc = iproto_listen((const char **)uri_array, uri_array_size);
+cleanup:
+	for (int i = 0; i < uri_with_opts; i++)
+		free(uri_with_opts_array[i]);
+	return rc;
 }
 
 void
