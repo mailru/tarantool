@@ -88,7 +88,12 @@ mem_str(const struct Mem *mem)
 		return tt_sprintf("%s", buf);
 	case MEM_TYPE_BIN: {
 		uint32_t svp = region_used(&fiber()->gc);
-		char *str = region_alloc(&fiber()->gc, mem->n * 2 + 1);
+		uint32_t size = mem->n * 2 + 1;
+		char *str = region_alloc(&fiber()->gc, size);
+		if (str == NULL) {
+			diag_set(OutOfMemory, size, "region_alloc", "str");
+			return NULL;
+		}
 		for (int i = 0; i < mem->n; ++i) {
 			int n = (mem->z[i] & 0xF0) >> 4;
 			str[2 * i] = n < 10 ? ('0' + n) : ('A' + n - 10);

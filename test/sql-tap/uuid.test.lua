@@ -695,9 +695,9 @@ test:do_execsql_test(
 test:do_catchsql_test(
     "uuid-7.2.8",
     [[
-        SELECT cast(randomblob(10) as UUID) FROM t2 LIMIT 1;
+        SELECT cast(x'1234567890abcdef' as UUID) FROM t2 LIMIT 1;
     ]], {
-        1, "Type mismatch: can not convert x'819192E578DE3FA24AF3' to uuid"
+        1, "Type mismatch: can not convert x'1234567890ABCDEF' to uuid"
     })
 
 test:execsql([[
@@ -856,9 +856,9 @@ test:do_execsql_test(
 test:do_catchsql_test(
     "uuid-8.2.8",
     [[
-        INSERT INTO tsu VALUES ('8_varbinary', randomblob(10));
+        INSERT INTO tsu VALUES ('8_varbinary', x'1234567890abcdef');
     ]], {
-        1, "Type mismatch: can not convert x'733CA8769291A0FEE366' to uuid"
+        1, "Type mismatch: can not convert x'1234567890ABCDEF' to uuid"
     })
 
 test:execsql([[
