@@ -657,7 +657,7 @@ test:do_catchsql_test(
     [[
         SELECT cast('1' AS UUID);
     ]], {
-        1, "Type mismatch: can not convert 1 to uuid"
+        1, "Type mismatch: can not convert '1' to uuid"
     })
 
 test:do_catchsql_test(
@@ -817,7 +817,7 @@ test:do_catchsql_test(
     [[
         INSERT INTO tsu VALUES ('3_string_wrong', '1');
     ]], {
-        1, "Type mismatch: can not convert 1 to uuid"
+        1, "Type mismatch: can not convert '1' to uuid"
     })
 
 test:do_catchsql_test(
@@ -1118,7 +1118,7 @@ test:do_catchsql_test(
     [[
         SELECT u > '1' FROM t2;
     ]], {
-        1, "Type mismatch: can not convert 1 to uuid"
+        1, "Type mismatch: can not convert '1' to uuid"
     })
 
 test:do_catchsql_test(
@@ -1182,7 +1182,7 @@ test:do_catchsql_test(
     [[
         SELECT u = '1' FROM t2;
     ]], {
-        1, "Type mismatch: can not convert 1 to uuid"
+        1, "Type mismatch: can not convert '1' to uuid"
     })
 
 test:do_catchsql_test(
@@ -1296,7 +1296,7 @@ test:do_catchsql_test(
     [[
         SELECT uuid('asd');
     ]], {
-        1, "Type mismatch: can not convert asd to integer"
+        1, "Type mismatch: can not convert 'asd' to integer"
     })
 
 test:do_catchsql_test(
@@ -1322,7 +1322,7 @@ test:do_catchsql_test(
     [[
         SELECT CAST('11111111-1111-1111-1111-111111111111111222222222' AS UUID);
     ]], {
-        1, "Type mismatch: can not convert 11111111-1111-1111-1111-111111111111111222222222 to uuid"
+        1, "Type mismatch: can not convert '11111111-1111-1111-1111-111111111111111222222222' to uuid"
     })
 
 test:do_catchsql_test(
@@ -1330,7 +1330,7 @@ test:do_catchsql_test(
     [[
         SELECT CAST('11111111-1111-1111-1111-11111' AS UUID);
     ]], {
-        1, "Type mismatch: can not convert 11111111-1111-1111-1111-11111 to uuid"
+        1, "Type mismatch: can not convert '11111111-1111-1111-1111-11111' to uuid"
     })
 
 test:execsql([[

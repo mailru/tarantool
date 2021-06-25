@@ -75,10 +75,11 @@ mem_str(const struct Mem *mem)
 	switch (mem->type) {
 	case MEM_TYPE_NULL:
 		return "NULL";
-	case MEM_TYPE_STR:
-		if ((mem->flags & MEM_Term) != 0)
-			return mem->z;
-		return tt_cstr(mem->z, mem->n);
+	case MEM_TYPE_STR: {
+		const char *str = ((mem->flags & MEM_Term) != 0) ?
+				  mem->z : tt_cstr(mem->z, mem->n);
+		return tt_sprintf("'%s'", str);
+	}
 	case MEM_TYPE_INT:
 		return tt_sprintf("%lld", mem->u.i);
 	case MEM_TYPE_UINT:
