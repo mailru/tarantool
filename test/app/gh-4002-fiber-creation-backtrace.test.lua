@@ -2,8 +2,8 @@ yaml = require('yaml')
 fiber = require('fiber')
 test_run = require('test_run').new()
 
-local stack_len = 0
-local parent_stack_len = 0
+stack_len = 0
+parent_stack_len = 0
 
 test_run:cmd('setopt delimiter ";"')
 foo = function()

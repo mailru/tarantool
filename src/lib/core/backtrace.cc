@@ -47,7 +47,6 @@
 #include <libunwind.h>
 
 #ifdef TARGET_OS_DARWIN
-#include <execinfo.h>
 #include <dlfcn.h>
 #endif
 
@@ -79,19 +78,29 @@ backtrace_proc_cache_clear(void)
 	proc_cache = NULL;
 }
 
-const char *
-get_proc_name(unw_cursor_t *unw_cur, unw_word_t *offset, bool skip_cache)
+int
+backtrace_proc_cache_find(unw_word_t ip, const char **name, unw_word_t *offset)
 {
-	static __thread char proc_name[BACKTRACE_NAME_MAX];
-	unw_word_t ip;
-	unw_get_reg(unw_cur, UNW_REG_IP, &ip);
+	struct proc_cache_entry *entry;
+	mh_int_t k;
 
-	if (skip_cache) {
-		unw_get_proc_name(unw_cur, proc_name, sizeof(proc_name),
-				  offset);
-		return proc_name;
+	if (proc_cache != NULL) {
+		k  = mh_i64ptr_find(proc_cache, ip, NULL);
+		if (k != mh_end(proc_cache)) {
+			entry = (struct proc_cache_entry *)
+				mh_i64ptr_node(proc_cache, k)->val;
+			*offset = entry->offset;
+			*name = entry->name;
+			return 0;
+		}
 	}
 
+	return -1;
+}
+
+int
+backtrace_proc_cache_put(unw_word_t ip, const char *name, unw_word_t offset)
+{
 	struct proc_cache_entry *entry;
 	struct mh_i64ptr_node_t node;
 	mh_int_t k;
@@ -99,39 +108,52 @@ get_proc_name(unw_cursor_t *unw_cur, unw_word_t *offset, bool skip_cache)
 	if (proc_cache == NULL) {
 		region_create(&cache_region, &cord()->slabc);
 		proc_cache = mh_i64ptr_new();
-		if (proc_cache == NULL) {
-			unw_get_proc_name(unw_cur, proc_name, sizeof(proc_name),
-					  offset);
-			goto error;
-		}
+		if (proc_cache == NULL)
+			return -1;
 	}
 
-	k  = mh_i64ptr_find(proc_cache, ip, NULL);
-	if (k != mh_end(proc_cache)) {
-		entry = (struct proc_cache_entry *)
-			mh_i64ptr_node(proc_cache, k)->val;
-		snprintf(proc_name, BACKTRACE_NAME_MAX, "%s", entry->name);
-		*offset = entry->offset;
-	}  else {
+	size_t size;
+	entry = region_alloc_object(&cache_region, typeof(*entry),
+				    &size);
+	if (entry == NULL)
+		return -1;
+
+	node.key = ip;
+	node.val = entry;
+	entry->offset = offset;
+	snprintf(entry->name, BACKTRACE_NAME_MAX - 1, "%s", name);
+	entry->name[BACKTRACE_NAME_MAX - 1] = 0;
+
+	k = mh_i64ptr_put(proc_cache, &node, NULL, NULL);
+	if (k == mh_end(proc_cache)) {
+		size_t used = region_used(&cache_region);
+		region_truncate(&cache_region, used - size);
+		return -1;
+	}
+
+	return 0;
+}
+
+const char *
+get_proc_name(unw_cursor_t *unw_cur, unw_word_t *offset, bool skip_cache)
+{
+	static __thread char proc_name[BACKTRACE_NAME_MAX];
+	const char *cache_name;
+	unw_word_t ip;
+
+	if (skip_cache) {
 		unw_get_proc_name(unw_cur, proc_name, sizeof(proc_name),
 				  offset);
-		size_t size;
-		entry = region_alloc_object(&cache_region, typeof(*entry),
-					    &size);
-		if (entry == NULL)
-			goto error;
-		node.key = ip;
-		node.val = entry;
-		snprintf(entry->name, BACKTRACE_NAME_MAX, "%s", proc_name);
-		entry->offset = *offset;
-
-		k = mh_i64ptr_put(proc_cache, &node, NULL, NULL);
-		if (k == mh_end(proc_cache)) {
-			free(entry);
-			goto error;
-		}
+		return proc_name;
 	}
-error:
+
+	unw_get_reg(unw_cur, UNW_REG_IP, &ip);
+	if (backtrace_proc_cache_find(ip, &cache_name, offset) == 0) {
+		return cache_name;
+	}
+
+	unw_get_proc_name(unw_cur, proc_name, sizeof(proc_name), offset);
+	backtrace_proc_cache_put(ip, proc_name, *offset);
 	return proc_name;
 }
 
@@ -450,7 +472,25 @@ backtrace_collect_ip(void **ip_buf, int limit)
 #ifndef TARGET_OS_DARWIN
 	unw_backtrace(ip_buf, limit);
 #else
-	backtrace(ip_buf, limit);
+	/*
+	 * This dumb implementation was chosen because the DARWIN
+	 * lacks unw_backtrace() routine from libunwind and
+	 * usual backtrace() from <execinfo.h> has less capabilities
+	 * than the libunwind version which uses DWARF.
+	 */
+	unw_cursor_t unw_cur;
+	unw_context_t unw_ctx;
+	int frame_no = 0;
+	unw_word_t ip;
+
+	unw_getcontext(&unw_ctx);
+	unw_init_local(&unw_cur, &unw_ctx);
+
+	while (frame_no < limit && unw_step(&unw_cur) > 0) {
+		unw_get_reg(&unw_cur, UNW_REG_IP, &ip);
+		ip_buf[frame_no] = (void *)ip;
+		++frame_no;
+	}
 #endif
 }
 
@@ -469,12 +509,15 @@ void
 backtrace_foreach_ip(backtrace_cb cb, void **ip_buf, int limit,
 		     void *cb_ctx)
 {
+	int demangle_status;
+	char *demangle_buf = NULL;
+	size_t demangle_buf_len = 0;
 #ifndef TARGET_OS_DARWIN
 	char proc_name[BACKTRACE_NAME_MAX];
 	unw_word_t ip = 0, offset = 0;
 	unw_proc_info_t pi;
 	int frame_no, ret = 0;
-	char *proc = NULL;
+	const char *proc = NULL;
 
 	unw_accessors_t *acc = unw_get_accessors(unw_local_addr_space);
 
@@ -487,21 +530,37 @@ backtrace_foreach_ip(backtrace_cb cb, void **ip_buf, int limit,
 	     frame_no++) {
 		ip = (unw_word_t)ip_buf[frame_no];
 
-		if (acc->get_proc_name == NULL) {
+		if (backtrace_proc_cache_find(ip, &proc, &offset) == 0) {
+			ret = 0;
+		} else if (acc->get_proc_name == NULL) {
 			ret = unw_get_proc_info_by_ip(unw_local_addr_space,
 						      ip, &pi, NULL);
 			offset = ip - pi.start_ip;
+			proc = NULL;
+			backtrace_proc_cache_put(ip, proc, offset);
 		} else {
 			ret = acc->get_proc_name(unw_local_addr_space, ip,
 						 proc_name, sizeof(proc_name),
 						 &offset, NULL);
 			proc = proc_name;
+			backtrace_proc_cache_put(ip, proc, offset);
+		}
+
+		if (proc != NULL) {
+			char *cxxname = abi::__cxa_demangle(proc, demangle_buf,
+							    &demangle_buf_len,
+							    &demangle_status);
+			if (cxxname != NULL) {
+				demangle_buf = cxxname;
+				proc = cxxname;
+			}
 		}
 		if (ret != 0 || cb(frame_no - 1, (void *)ip, proc,
 				   (size_t)offset, cb_ctx) != 0)
 			break;
 	}
 
+	free(demangle_buf);
 	if (ret != 0)
 		say_debug("unwinding error: %s", unw_strerror(ret));
 #else
@@ -509,19 +568,37 @@ backtrace_foreach_ip(backtrace_cb cb, void **ip_buf, int limit,
 	void *ip = NULL;
 	size_t offset = 0;
 	Dl_info dli;
+	const char *proc = NULL;
 
 	for (frame_no = 1; frame_no < limit && ip_buf[frame_no] != NULL;
 	     ++frame_no) {
 		ip = ip_buf[frame_no];
-		ret = dladdr(ip, &dli);
-		if (ret == 0)
-			break;
-		offset = (char *)ip - (char *)dli.dli_saddr;
+		if (backtrace_proc_cache_find((unw_word_t)ip, &proc, 
+					      &offset) == 0) {
+			ret = 1;
+		} else {
+			ret = dladdr(ip, &dli);
+			if (ret == 0)
+				break;
+			offset = (char *)ip - (char *)dli.dli_saddr;
+			proc = dli.dli_sname;
+			backtrace_proc_cache_put((unw_word_t)ip, proc, offset);
+		}
 
-		if (cb(frame_no - 1, ip, dli.dli_sname, offset, cb_ctx) != 0)
+		if (proc != NULL) {
+			char *cxxname = abi::__cxa_demangle(proc, demangle_buf,
+							    &demangle_buf_len,
+							    &demangle_status);
+			if (cxxname != NULL) {
+				demangle_buf = cxxname;
+				proc = cxxname;
+			}
+		}
+		if (cb(frame_no - 1, ip, proc, offset, cb_ctx) != 0)
 			break;
 	}
 
+	free(demangle_buf);
 	if (ret == 0)
 		say_debug("unwinding error: %i", ret);
 #endif
