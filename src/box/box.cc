@@ -1538,11 +1538,6 @@ box_promote(void)
 		return -1;
 	}
 
-	/*
-	 * Do nothing when box isn't configured and when PROMOTE was already
-	 * written for this term (synchronous replication and leader election
-	 * are in sync, and both chose this node as a leader).
-	 */
 	if (!is_box_configured)
 		return 0;
 	bool run_elections = false;
@@ -1558,21 +1553,13 @@ box_promote(void)
 			 "manual elections");
 		return -1;
 	case ELECTION_MODE_MANUAL:
-		if (box_raft()->state == RAFT_STATE_LEADER)
-			return 0;
-		run_elections = true;
-		break;
 	case ELECTION_MODE_CANDIDATE:
+		run_elections = box_raft()->state != RAFT_STATE_LEADER;
 		/*
-		 * Leader elections are enabled, and this instance is allowed to
-		 * promote only if it's already an elected leader. No manual
-		 * elections.
+		 * Do nothing when PROMOTE was already written for this term
+		 * (synchronous replication and leader election are in sync, and
+		 * both chose this node as a leader).
 		 */
-		if (box_raft()->state != RAFT_STATE_LEADER) {
-			diag_set(ClientError, ER_UNSUPPORTED, "election_mode="
-				 "'candidate'", "manual elections");
-			return -1;
-		}
 		if (txn_limbo_replica_term(&txn_limbo, instance_id) ==
 		    box_raft()->term)
 			return 0;
