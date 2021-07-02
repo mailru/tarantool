@@ -95,18 +95,14 @@ sql_stmt_cache_delete(struct stmt_cache_entry *entry)
 	sql_cache_entry_delete(entry);
 }
 
-static struct stmt_cache_entry *
+struct stmt_cache_entry *
 stmt_cache_find_entry(uint32_t stmt_id)
 {
-	if (sql_stmt_cache.last_found != NULL) {
-		const char *sql_str =
-			sql_stmt_query_str(sql_stmt_cache.last_found->stmt);
-		uint32_t last_stmt_id = sql_stmt_calculate_id(sql_str,
-							 strlen(sql_str));
-		if (last_stmt_id == stmt_id)
-			return sql_stmt_cache.last_found;
-		/* Fallthrough to slow hash search. */
-	}
+	if (sql_stmt_cache.last_found != NULL &&
+	    sql_stmt_cache.last_id == stmt_id)
+		return sql_stmt_cache.last_found;
+
+	/* Fallthrough to slow hash search. */
 	struct mh_i32ptr_t *hash = sql_stmt_cache.hash;
 	mh_int_t stmt = mh_i32ptr_find(hash, stmt_id, NULL);
 	if (stmt == mh_end(hash))
@@ -114,7 +110,10 @@ stmt_cache_find_entry(uint32_t stmt_id)
 	struct stmt_cache_entry *entry = mh_i32ptr_node(hash, stmt)->val;
 	if (entry == NULL)
 		return NULL;
+
 	sql_stmt_cache.last_found = entry;
+	sql_stmt_cache.last_id = stmt_id;
+
 	return entry;
 }
 
@@ -261,7 +260,7 @@ sql_stmt_cache_insert(struct sql_stmt *stmt)
 		return -1;
 	const char *sql_str = sql_stmt_query_str(stmt);
 	uint32_t stmt_id = sql_stmt_calculate_id(sql_str, strlen(sql_str));
-	assert(sql_stmt_cache_find(stmt_id) == NULL);
+	assert(stmt_cache_find_entry(stmt_id) == NULL);
 	const struct mh_i32ptr_node_t id_node = { stmt_id, entry };
 	struct mh_i32ptr_node_t *old_node = NULL;
 	mh_int_t i = mh_i32ptr_put(hash, &id_node, &old_node, NULL);

@@ -1,7 +1,5 @@
-#ifndef INCLUDES_TARANTOOL_LUA_EXECUTE_H
-#define INCLUDES_TARANTOOL_LUA_EXECUTE_H
 /*
- * Copyright 2010-2019, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2020, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -30,43 +28,28 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+/*
+ * Internal definitions for sql parse tree.
+ * Subject for future additions.
+ *
+ */
+#pragma once
+
 #include <stdbool.h>
-#include "sqlparser.h"
 
-struct port;
-struct sql_bind;
-struct lua_State;
+#if defined(__cplusplus)
+extern "C" {
+#endif
 
-/**
- * Dump data from port to Lua stack. Data in port contains tuples,
- * metadata, or information obtained from an executed SQL query.
- *
- * @param port Port that contains SQL response.
- * @param L Lua stack.
- */
-void
-port_sql_dump_lua(struct port *port, struct lua_State *L, bool is_flat);
-
-/**
- * Parse Lua table of SQL parameters.
- *
- * @param L Lua stack contains table with parameters. Each
- *        parameter either must have scalar type, or must be a
- *        single-row table with the following format:
- *        table[name] = value. Name - string name of the named
- *        parameter, value - scalar value of the parameter.
- *        Named and positioned parameters can be mixed.
- * @param[out] out_bind Pointer to save decoded parameters.
- * @param idx Position of table with parameters on Lua stack.
- *
- * @retval  >= 0 Number of decoded parameters.
- * @retval -1 Client or memory error.
- */
-int
-lua_sql_bind_list_decode(struct lua_State *L, struct sql_bind **out_bind,
-			 int idx);
+#include "sql_ast_ffi_defs.h"
+struct sql_parsed_ast*
+sql_ast_alloc(void);
 
 void
-box_lua_sql_init(struct lua_State *L);
+sql_ast_free(struct sql_parsed_ast *p);
 
-#endif /* INCLUDES_TARANTOOL_LUA_EXECUTE_H */
+
+#if defined(__cplusplus)
+}
+#endif

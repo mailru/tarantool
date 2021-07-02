@@ -186,7 +186,11 @@ add_library(box STATIC
     sql.c
     bind.c
     execute.c
+    sqlparser.c
+    sqlserialize.c
+    sqldeserialize.c
     sql_stmt_cache.c
+    sqlparser.c
     wal.c
     call.c
     merger.c
@@ -213,6 +217,7 @@ add_library(box STATIC
     lua/net_box.c
     lua/xlog.c
     lua/execute.c
+    lua/sqlparser.c
     lua/key_def.c
     lua/merger.c
     ${bin_sources})
