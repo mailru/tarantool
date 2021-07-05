@@ -126,6 +126,32 @@ test_run:cmd(string.format("start server test with args=\"%s\"", thread_count))
  | ---
  | - true
  | ...
+test_run:cmd('switch test')
+ | ---
+ | - true
+ | ...
+test_run:cmd("setopt delimiter ';'")
+ | ---
+ | - true
+ | ...
+function errinj_set(thread_id)
+    if thread_id ~= nil then
+        box.error.injection.set("ERRINJ_IPROTO_SINGLE_THREAD_STAT", thread_id)
+    end
+end;
+ | ---
+ | ...
+test_run:cmd("setopt delimiter ''");
+ | ---
+ | - true
+ | ...
+function ping() return "pong" end
+ | ---
+ | ...
+test_run:cmd("switch default")
+ | ---
+ | - true
+ | ...
 server_addr = test_run:cmd("eval test 'return box.cfg.listen'")[1]
  | ---
  | ...

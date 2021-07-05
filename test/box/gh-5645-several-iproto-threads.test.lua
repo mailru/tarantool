@@ -78,6 +78,16 @@ assert(test_run:grep_log("test", "Incorrect value for option 'iproto_threads'", 
 thread_count = 2
 fibers_count = 100
 test_run:cmd(string.format("start server test with args=\"%s\"", thread_count))
+test_run:cmd('switch test')
+test_run:cmd("setopt delimiter ';'")
+function errinj_set(thread_id)
+    if thread_id ~= nil then
+        box.error.injection.set("ERRINJ_IPROTO_SINGLE_THREAD_STAT", thread_id)
+    end
+end;
+test_run:cmd("setopt delimiter ''");
+function ping() return "pong" end
+test_run:cmd("switch default")
 server_addr = test_run:cmd("eval test 'return box.cfg.listen'")[1]
 iproto_call(server_addr, fibers_count)
 -- Total statistics from all threads.
