@@ -1,0 +1,72 @@
+# lua: system-wide profiler
+
+* **Status**: In progress
+* **Start date**: 02-07-2021
+* **Authors**: Mikhail Shishatskiy @Shishqa m.shishatskiy@tarantool.org, Maxim Kokryashkin @fckxorg m.kokryashkin@tarantool.org
+* **Issues**: [#781](https://github.com/tarantool/tarantool/issues/781)
+
+## Summary
+The document describes the platform profiler for LuaJIT. It is needed to obtain a complete view of platform performance. Existing LuaJIT profiler only able to give you information about virtual machine states and guest stack. Hence, the document proposes to extend the existing LuaJIT profiler, so it will be able to gather stack traces from both C and Lua.
+
+## Background and motivation
+
+Currently, available options for profiling LuaJIT are not fine enough to get an understanding of performance. For example, perf only able to show host stack, so all the Lua calls are seen as single pcall. Oppositely, jit.p module provided with LuaJIT is not able to give any information about the host stack.
+
+To get a detailed perspective of platform performance, a more advanced profiler is needed. The desired profiler must be able to capture both guest and host stacks simultaneously, along with virtual machine states.
+
+## Detailed design
+
+The proposed approach is to extend existing profiler embedded into LuaJIT, so it will be able to capture host stack too. 
+
+### Host stack
+
+The default sampling profiler implementation in LuaJIT, which can be seen [here](https://github.com/tarantool/luajit/blob/tarantool/src/lj_profile.c), follows this flow:
+```
+luaJIT_profile_start --> profile_timer_start
+
+...                                                  
+                                                    |lock VM state
+[signal emmited] --> profile_signal_trigger:      __|prepare args for a callback
+                                                    |schedule callback execution
+                                                    |unlock VM state
+...
+
+luaJIT_profile_stop --> profile_timer_stop
+```                                   
+
+Callback, which is scheduled by `profile_signal_trigger` can be used to dump needed information, including VM stack. However, even though the guest stack is still the same by the time when callback executed, the host stack is already have been changed, so the final stack dump can not be considered valid.
+
+Hence, to get a valid final snapshot of both stacks, a dump should be done right at the signal, like [there](https://github.com/Shishqa/luajit/blob/c0da971640512696f5c166e8f2dc1ed982a8f451/src/profile/sysprof.c#L63). 
+
+The host stack can be dumped with`backtrace(void**, int)`. 
+
+### VM stack
+We are using an implementation similar to the one, which is used in [lj_debug_dumpstack](https://github.com/tarantool/luajit/blob/af889e4608e6eca495dd85e6161d8bcd7d3628e6/src/lj_debug.c#L580) to dump guest stack. But there is a problem with that because sometimes the VM stack can be invalid, thanks to this [bug](https://github.com/tarantool/luajit/blob/af889e4608e6eca495dd85e6161d8bcd7d3628e6/src/vm_x64.dasc#L4594). As you can see down the link, VM state changes to LFUNC, and after that stack reallocation takes place. So if our signal takes place in between, we will get a segmentation fault. Anyway, that issue is easy to fix, so this approach is suitable.
+
+### Symbol table
+
+It is a heavy task to dump names of functions every time, so instead, we will dump a symbol table in the beginning. Later on, it will be sufficient to dump only a function's address. However, some functions can be loaded and unloaded several times, and their addresses will be different each time. Hence, we will update the symbol table accordingly. To carry out the symtab update, we will drop in new symtab record into the file, where the profiler stores data.
+
+A symbol table looks like this (the same format as symtab in memprof):
+```
+  1 byte        8 bytes                           8 bytes    
+ _______________________________________________________________
+| type | address of function | function name | first line number|
+ ---------------------------------------------------------------
+```
+
+
+
+### Traces
+
+Traces are the real problem here because there is no mechanism in LuaJIT to unwind them. Consequently, we need to introduce our own. The basic idea is to place some markers into the bytecode of a trace to indicate the start and the end of each function call and use them to unwind the whole call stack of a trace. 
+
+<span style="color:red">A more specific description is needed</span>.
+
+## Rationale and alternatives
+
+Another way to implement such a thing is to make perf to see guest stack. To do so, we need to map virtual machine symbols (and that functionality is present in LuaJIT ([link](https://github.com/tarantool/luajit/blob/d4e12d7ac28e3bc857d30971dd77deec66a67297/src/lj_trace.c#L96))) and do something so perf could unwind the virtual machine stack.
+Stack unwinding from outside of the LuaJIT is the problem we didn’t manage to solve for today. There are different approaches to do this:
+- *Save rsp register value to rbp and preserve rbp.* However, LuaJIT uses rbp as a general-purpose register, and it is hard not to break everything trying to use it only for stack frames.
+- *Coordinated work of `jit.p` and perf.* This approach requires modifying perf the way it will send LuaJIT suspension signal, and after getting info about the host stack, it will receive information about the guest stack and join them. This solution is quite possible, but modified perf doesn't seem like a production-ready solution.
+- *Dwarf unwinding*
