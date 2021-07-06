@@ -919,15 +919,26 @@ constructAutomaticIndex(Parse * pParse,			/* The parsing context */
 	/* Create the automatic index */
 	assert(pLevel->iIdxCur >= 0);
 	pLevel->iIdxCur = pParse->nTab++;
-	struct sql_key_info *pk_info =
-		sql_key_info_new_from_key_def(pParse->db, idx_def->key_def);
-	if (pk_info == NULL) {
+	uint32_t field_count = nKeyCol + 1;
+	size = sizeof(struct sql_ephemeral_space_info) +
+		field_count * sizeof(struct sql_ephemeral_field_info);
+	struct sql_ephemeral_space_info *info =
+		sqlDbMallocRawNN(sql_get(), size);
+	if (info == NULL) {
 		pParse->is_aborted = true;
 		return;
 	}
+	info->field_count = field_count;
+	info->type = SQL_EPHEMERAL_INDEX_ALL;
+	for (int i = 0; i < nKeyCol; i++) {
+		info->fields[i].type = idx_def->key_def->parts[i].type;
+		info->fields[i].coll_id = idx_def->key_def->parts[i].coll_id;
+	}
+	info->fields[nKeyCol].type = FIELD_TYPE_UNSIGNED;
+	info->fields[nKeyCol].coll_id = COLL_NONE;
 	int reg_eph = sqlGetTempReg(pParse);
-	sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph, nKeyCol + 1, 0,
-		      (char *)pk_info, P4_KEYINFO);
+	sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph, field_count, 0,
+		      (char *)info, P4_SPACEINFO);
 	sqlVdbeAddOp3(v, OP_IteratorOpen, pLevel->iIdxCur, 0, reg_eph);
 	VdbeComment((v, "for %s", space->def->name));
 

@@ -455,35 +455,42 @@ sqlInsert(Parse * pParse,	/* Parser context */
 			srcTab = pParse->nTab++;
 			reg_eph = ++pParse->nMem;
 			regRec = sqlGetTempReg(pParse);
-			regCopy = sqlGetTempRange(pParse, nColumn + 1);
-			sqlVdbeAddOp2(v, OP_OpenTEphemeral, reg_eph,
-					  nColumn + 1);
-			/*
-			 * This key_info is used to show that
-			 * rowid should be the first part of PK in
-			 * case we used AUTOINCREMENT feature.
-			 * This way we will save initial order of
-			 * the inserted values. The order is
-			 * important if we use the AUTOINCREMENT
-			 * feature, since changing the order can
-			 * change the number inserted instead of
-			 * NULL.
-			 */
-			if (space->sequence != NULL) {
-				struct sql_key_info *key_info =
-					sql_key_info_new(pParse->db,
-							 nColumn + 1);
-				key_info->parts[nColumn].type =
-					FIELD_TYPE_UNSIGNED;
-				key_info->is_pk_rowid = true;
-				sqlVdbeChangeP4(v, -1, (void *)key_info,
-					        P4_KEYINFO);
+			uint32_t cols = nColumn + 1;
+			regCopy = sqlGetTempRange(pParse, cols);
+			uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+				cols * sizeof(struct sql_ephemeral_field_info);
+			struct sql_ephemeral_space_info *info =
+				sqlDbMallocRawNN(sql_get(), size);
+			if (info == NULL)
+				goto insert_cleanup;
+			info->field_count = cols;
+			info->type = SQL_EPHEMERAL_INDEX_ROWID;
+			for (int i = 0; i < nColumn; ++i) {
+				if (pColumn != NULL) {
+					int fieldno = pColumn->a[i].idx;
+					info->fields[i].type =
+						space_def->fields[fieldno].type;
+					info->fields[i].coll_id =
+						space_def->fields[fieldno].coll_id;
+				} else {
+					assert(nColumn == (int)space_def->field_count);
+					info->fields[i].type =
+						space_def->fields[i].type;
+					info->fields[i].coll_id =
+						space_def->fields[i].coll_id;
+				}
 			}
+			info->fields[cols - 1].type = FIELD_TYPE_UNSIGNED;
+			info->fields[cols - 1].coll_id = COLL_NONE;
+			sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph, cols, 0,
+				      (char *)info, P4_SPACEINFO);
 			addrL = sqlVdbeAddOp1(v, OP_Yield, dest.iSDParm);
 			VdbeCoverage(v);
 			sqlVdbeAddOp2(v, OP_NextIdEphemeral, reg_eph,
 					  regCopy + nColumn);
 			sqlVdbeAddOp3(v, OP_Copy, regFromSelect, regCopy, nColumn-1);
+			sqlVdbeAddOp4(v, OP_ApplyType, regCopy, nColumn, 0,
+				      (char *)info, P4_STATIC);
 			sqlVdbeAddOp3(v, OP_MakeRecord, regCopy,
 					  nColumn + 1, regRec);
 			/* Set flag to save memory allocating one by malloc. */

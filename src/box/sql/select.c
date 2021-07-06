@@ -2453,16 +2453,68 @@ generateWithRecursiveQuery(Parse * pParse,	/* Parsing context */
 	/* Allocate cursors for Current, Queue, and Distinct. */
 	regCurrent = ++pParse->nMem;
 	sqlVdbeAddOp3(v, OP_OpenPseudo, iCurrent, regCurrent, nCol);
-	if (pOrderBy) {
-		struct sql_key_info *key_info =
-			sql_multiselect_orderby_to_key_info(pParse, p, 1);
-		sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_queue,
-				  pOrderBy->nExpr + 2, 0, (char *)key_info,
-				  P4_KEYINFO);
+	uint32_t field_count;
+	uint32_t expr_count;
+	if (pOrderBy != NULL) {
+		field_count = pOrderBy->nExpr + 2;
+		expr_count = pOrderBy->nExpr;
+	} else {
+		field_count = nCol + 1;
+		expr_count = nCol;
+	}
+	uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+		field_count * sizeof(struct sql_ephemeral_field_info);
+	struct sql_ephemeral_space_info *info =
+		sqlDbMallocRawNN(sql_get(), size);
+	if (info == NULL)
+		goto end_of_recursive_query;
+	info->field_count = field_count;
+	info->type = SQL_EPHEMERAL_INDEX_ALL;
+	for (uint32_t i = 0; i < expr_count; ++i) {
+		struct ExprList_item *item;
+		struct Expr *term;
+		uint32_t fieldno;
+		if (pOrderBy != NULL) {
+			item = &pOrderBy->a[i];
+			term = item->pExpr;
+			fieldno = item->u.x.iOrderByCol - 1;
+		} else {
+			term = p->pEList->a[i].pExpr;
+			fieldno = i;
+		}
+		uint32_t id = COLL_NONE;
+		bool unused;
+		if ((term->flags & EP_Collate) != 0) {
+			struct coll *unused_coll;
+			if (sql_expr_coll(pParse, term, &unused, &id,
+					  &unused_coll) != 0)
+				goto end_of_recursive_query;
+		} else {
+			id = multi_select_coll_seq(pParse, p, fieldno);
+			if (id != COLL_NONE) {
+				const char *name = coll_by_id(id)->name;
+				pOrderBy->a[i].pExpr =
+					sqlExprAddCollateString(pParse, term,
+								name);
+			}
+		}
+		info->fields[i].type = sql_expr_type(term);
+		if (info->fields[i].type == FIELD_TYPE_ANY)
+			info->fields[i].type = FIELD_TYPE_SCALAR;
+		info->fields[i].coll_id = id;
+	}
+	sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_queue, field_count, 0,
+		      (char *)info, P4_SPACEINFO);
+	if (pOrderBy != NULL) {
+		info->fields[field_count - 2].type = FIELD_TYPE_UNSIGNED;
+		info->fields[field_count - 2].coll_id = COLL_NONE;
+		info->fields[field_count - 1].type = FIELD_TYPE_VARBINARY;
+		info->fields[field_count - 1].coll_id = COLL_NONE;
 		VdbeComment((v, "Orderby table"));
 		destQueue.pOrderBy = pOrderBy;
 	} else {
-		sqlVdbeAddOp2(v, OP_OpenTEphemeral, reg_queue, nCol + 1);
+		info->fields[field_count - 1].type = FIELD_TYPE_UNSIGNED;
+		info->fields[field_count - 1].coll_id = COLL_NONE;
 		VdbeComment((v, "Queue table"));
 	}
 	sqlVdbeAddOp3(v, OP_IteratorOpen, iQueue, 0, reg_queue);
@@ -2672,8 +2724,29 @@ multiSelect(Parse * pParse,	/* Parsing context */
 	 */
 	if (dest.eDest == SRT_EphemTab) {
 		assert(p->pEList);
-		int nCols = p->pEList->nExpr;
-		sqlVdbeAddOp2(v, OP_OpenTEphemeral, dest.reg_eph, nCols + 1);
+		uint32_t field_count = p->pEList->nExpr + 1;
+		uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+			field_count * sizeof(struct sql_ephemeral_field_info);
+		struct sql_ephemeral_space_info *info =
+			sqlDbMallocRawNN(sql_get(), size);
+		if (info == NULL)
+			goto multi_select_end;
+		info->field_count = field_count;
+		info->type = SQL_EPHEMERAL_INDEX_ALL;
+		for (uint32_t i = 0; i < field_count - 1; ++i) {
+			struct Expr *expr = p->pEList->a[i].pExpr;
+			info->fields[i].type = sql_expr_type(expr);
+			bool unused;
+			struct coll *coll;
+			if (sql_expr_coll(pParse, expr, &unused,
+					  &info->fields[i].coll_id, &coll) != 0)
+			goto multi_select_end;
+		}
+		info->fields[field_count - 1].type = FIELD_TYPE_UNSIGNED;
+		info->fields[field_count - 1].coll_id = COLL_NONE;
+		pParse->nMem += field_count;
+		sqlVdbeAddOp4(v, OP_OpenTEphemeral, dest.reg_eph, field_count,
+			      0, (char *)info, P4_SPACEINFO);
 		sqlVdbeAddOp3(v, OP_IteratorOpen, dest.iSDParm, 0, dest.reg_eph);
 		VdbeComment((v, "Destination temp"));
 		dest.eDest = SRT_Table;
@@ -3000,15 +3073,20 @@ multiSelect(Parse * pParse,	/* Parsing context */
 	 */
 	if (p->selFlags & SF_UsesEphemeral) {
 		assert(p->pNext == NULL);
-		int nCol = p->pEList->nExpr;
-		struct sql_key_info *key_info = sql_key_info_new(db, nCol);
-		if (key_info == NULL)
+		uint32_t field_count = p->pEList->nExpr;
+		uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+			field_count * sizeof(struct sql_ephemeral_field_info);
+		struct sql_ephemeral_space_info *info =
+			sqlDbMallocRawNN(pParse->db, size);
+		if (info == NULL)
 			goto multi_select_end;
-		for (int i = 0; i < nCol; i++) {
-			key_info->parts[i].coll_id =
+		info->field_count = field_count;
+		info->type = SQL_EPHEMERAL_INDEX_ALL;
+		for (uint32_t i = 0; i < field_count; ++i) {
+			info->fields[i].type = FIELD_TYPE_SCALAR;
+			info->fields[i].coll_id =
 				multi_select_coll_seq(pParse, p, i);
 		}
-
 		for (struct Select *pLoop = p; pLoop; pLoop = pLoop->pPrior) {
 			for (int i = 0; i < 2; i++) {
 				int addr = pLoop->addrOpenEphm[i];
@@ -3019,14 +3097,13 @@ multiSelect(Parse * pParse,	/* Parsing context */
 					assert(pLoop->addrOpenEphm[1] < 0);
 					break;
 				}
-				sqlVdbeChangeP2(v, addr, nCol);
-				sqlVdbeChangeP4(v, addr,
-						    (char *)sql_key_info_ref(key_info),
-						    P4_KEYINFO);
+				int p4type = (i == 0) && pLoop == p ?
+					     P4_SPACEINFO : P4_STATIC;
+				sqlVdbeChangeP2(v, addr, field_count);
+				sqlVdbeChangeP4(v, addr, (char *)info, p4type);
 				pLoop->addrOpenEphm[i] = -1;
 			}
 		}
-		sql_key_info_unref(key_info);
 	}
 
  multi_select_end:
@@ -5348,13 +5425,38 @@ resetAccumulator(Parse * pParse, AggInfo * pAggInfo)
 				pParse->is_aborted = true;
 				pFunc->iDistinct = -1;
 			} else {
-				struct sql_key_info *key_info =
-					sql_expr_list_to_key_info(pParse,
-								  pE->x.pList,
-								  0);
+				uint32_t field_count = pE->x.pList->nExpr;
+				uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+					field_count * sizeof(struct sql_ephemeral_field_info);
+				struct sql_ephemeral_space_info *info =
+					sqlDbMallocRawNN(pParse->db, size);
+				if (info == NULL) {
+					pParse->is_aborted = true;
+					pFunc->iDistinct = -1;
+					return;
+				}
+				info->field_count = field_count;
+				info->type = SQL_EPHEMERAL_INDEX_ALL;
+				for (uint32_t i = 0; i < field_count; ++i) {
+					struct Expr *e = pE->x.pList->a[i].pExpr;
+					uint32_t id;
+					bool unused;
+					struct coll *coll;
+					if (sql_expr_coll(pParse, e, &unused,
+							  &id, &coll) != 0) {
+						sqlDbFree(pParse->db, info);
+						pParse->is_aborted = true;
+						pFunc->iDistinct = -1;
+						return;
+					}
+					info->fields[i].type = sql_expr_type(e);
+					if (info->fields[i].type == FIELD_TYPE_ANY)
+						info->fields[i].type = FIELD_TYPE_SCALAR;
+					info->fields[i].coll_id = id;
+				}
 				sqlVdbeAddOp4(v, OP_OpenTEphemeral,
-						  pFunc->reg_eph, 1, 0,
-						  (char *)key_info, P4_KEYINFO);
+					      pFunc->reg_eph, 1, 0,
+					      (char *)info, P4_SPACEINFO);
 				sqlVdbeAddOp3(v, OP_IteratorOpen,
 						  pFunc->iDistinct, 0, pFunc->reg_eph);
 			}
@@ -5888,11 +5990,34 @@ sqlSelect(Parse * pParse,		/* The parser context */
 	/* If the output is destined for a temporary table, open that table.
 	 */
 	if (pDest->eDest == SRT_EphemTab) {
-		struct sql_key_info *key_info =
-			sql_expr_list_to_key_info(pParse, pEList, 0);
-		sqlVdbeAddOp4(v, OP_OpenTEphemeral, pDest->reg_eph,
-				  pEList->nExpr + 1, 0, (char *)key_info,
-				  P4_KEYINFO);
+		uint32_t field_count = pEList->nExpr + 1;
+		uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+			field_count * sizeof(struct sql_ephemeral_field_info);
+		struct sql_ephemeral_space_info *info =
+			sqlDbMallocRawNN(pParse->db, size);
+		if (info == NULL)
+			goto select_end;
+		info->field_count = field_count;
+		info->type = SQL_EPHEMERAL_INDEX_ALL;
+		for (uint32_t i = 0; i < field_count - 1; ++i) {
+			struct Expr *e = pEList->a[i].pExpr;
+			uint32_t id;
+			bool unused;
+			struct coll *coll;
+			if (sql_expr_coll(pParse, e, &unused,
+					  &id, &coll) != 0) {
+				sqlDbFree(pParse->db, info);
+				goto select_end;
+			}
+			info->fields[i].type = sql_expr_type(e);
+			if (info->fields[i].type == FIELD_TYPE_ANY)
+				info->fields[i].type = FIELD_TYPE_SCALAR;
+			info->fields[i].coll_id = id;
+		}
+		info->fields[field_count - 1].type = FIELD_TYPE_UNSIGNED;
+		info->fields[field_count - 1].coll_id = COLL_NONE;
+		sqlVdbeAddOp4(v, OP_OpenTEphemeral, pDest->reg_eph, field_count,
+			      0, (char *)info, P4_SPACEINFO);
 		sqlVdbeAddOp3(v, OP_IteratorOpen, pDest->iSDParm, 0,
 				  pDest->reg_eph);
 
@@ -5918,13 +6043,34 @@ sqlSelect(Parse * pParse,		/* The parser context */
 	if (p->selFlags & SF_Distinct) {
 		sDistinct.cur_eph = pParse->nTab++;
 		sDistinct.reg_eph = ++pParse->nMem;
-		struct sql_key_info *key_info =
-			sql_expr_list_to_key_info(pParse, p->pEList, 0);
+		uint32_t field_count = p->pEList->nExpr;
+		uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+			field_count * sizeof(struct sql_ephemeral_field_info);
+		struct sql_ephemeral_space_info *info =
+			sqlDbMallocRawNN(pParse->db, size);
+		if (info == NULL)
+			goto select_end;
+		info->field_count = field_count;
+		info->type = SQL_EPHEMERAL_INDEX_ALL;
+		for (uint32_t i = 0; i < field_count; ++i) {
+			struct Expr *e = p->pEList->a[i].pExpr;
+			uint32_t id;
+			bool unused;
+			struct coll *coll;
+			if (sql_expr_coll(pParse, e, &unused,
+					  &id, &coll) != 0) {
+				sqlDbFree(pParse->db, info);
+				goto select_end;
+			}
+			info->fields[i].type = sql_expr_type(e);
+			if (info->fields[i].type == FIELD_TYPE_ANY)
+				info->fields[i].type = FIELD_TYPE_SCALAR;
+			info->fields[i].coll_id = id;
+		}
 		sDistinct.addrTnct = sqlVdbeAddOp4(v, OP_OpenTEphemeral,
-						       sDistinct.reg_eph,
-						       key_info->part_count,
-						       0, (char *)key_info,
-						       P4_KEYINFO);
+						   sDistinct.reg_eph,
+						   field_count, 0, (char *)info,
+						   P4_SPACEINFO);
 		sqlVdbeAddOp3(v, OP_IteratorOpen, sDistinct.cur_eph, 0,
 				  sDistinct.reg_eph);
 		VdbeComment((v, "Distinct table"));

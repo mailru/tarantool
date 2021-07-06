@@ -2773,7 +2773,6 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 
 	switch (pExpr->op) {
 	case TK_IN:{
-			int addr;	/* Address of OP_OpenEphemeral instruction */
 			Expr *pLeft = pExpr->pLeft;	/* the LHS of the IN operator */
 			int nVal;	/* Size of vector pLeft */
 
@@ -2793,14 +2792,19 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 			 * then NUMBER type is used.
 			 */
 			pExpr->iTable = pParse->nTab++;
+			uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+				nVal * sizeof(struct sql_ephemeral_field_info);
+			struct sql_ephemeral_space_info *info =
+				sqlDbMallocRawNN(sql_get(), size);
+			if (info == NULL)
+				return 0;
+			info->field_count = nVal;
+			info->type = SQL_EPHEMERAL_INDEX_ALL;
 			int reg_eph = ++pParse->nMem;
-			addr = sqlVdbeAddOp2(v, OP_OpenTEphemeral,
-						 reg_eph, nVal);
+			sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph, nVal, 0,
+				      (char *)info, P4_SPACEINFO);
 			sqlVdbeAddOp3(v, OP_IteratorOpen, pExpr->iTable, 0,
 					  reg_eph);
-			struct sql_key_info *key_info = sql_key_info_new(pParse->db, nVal);
-			if (key_info == NULL)
-				return 0;
 
 			if (ExprHasProperty(pExpr, EP_xIsSelect)) {
 				/* Case 1:     expr IN (SELECT ...)
@@ -2830,7 +2834,6 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 					    (pParse, pSelect, &dest)) {
 						sqlDbFree(pParse->db,
 							      dest.dest_type);
-						sql_key_info_unref(key_info);
 						return 0;
 					}
 					sqlDbFree(pParse->db,
@@ -2841,8 +2844,10 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 						Expr *p =
 						    sqlVectorFieldSubexpr
 						    (pLeft, i);
+						info->fields[i].type =
+							FIELD_TYPE_SCALAR;
 						if (sql_binary_compare_coll_seq(pParse, p, pEList->a[i].pExpr,
-										&key_info->parts[i].coll_id) != 0)
+										&info->fields[i].coll_id) != 0)
 							return 0;
 					}
 				}
@@ -2863,8 +2868,9 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 					sql_expr_type(pLeft);
 				bool unused;
 				struct coll *unused_coll;
+				info->fields[0].type = FIELD_TYPE_SCALAR;
 				if (sql_expr_coll(pParse, pExpr->pLeft, &unused,
-						  &key_info->parts[0].coll_id,
+						  &info->fields[0].coll_id,
 						  &unused_coll) != 0)
 					return 0;
 
@@ -2899,8 +2905,6 @@ sqlCodeSubselect(Parse * pParse,	/* Parsing context */
 				sqlReleaseTempReg(pParse, r1);
 				sqlReleaseTempReg(pParse, r2);
 			}
-			sqlVdbeChangeP4(v, addr, (void *)key_info,
-					    P4_KEYINFO);
 			break;
 		}
 

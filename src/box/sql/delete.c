@@ -224,47 +224,42 @@ sql_table_delete_from(struct Parse *parse, struct SrcList *tab_list,
 		 * is held in ephemeral table, there is no PK for
 		 * it, so columns should be loaded manually.
 		 */
-		struct sql_key_info *pk_info = NULL;
 		int reg_eph = ++parse->nMem;
 		int reg_pk = parse->nMem + 1;
 		int pk_len;
 		int eph_cursor = parse->nTab++;
 		int addr_eph_open = sqlVdbeCurrentAddr(v);
+		pk_len = is_view ? space->def->field_count + 1 :
+			 space->index[0]->def->key_def->part_count;
+		uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+			pk_len * sizeof(struct sql_ephemeral_field_info);
+		struct sql_ephemeral_space_info *info =
+			sqlDbMallocRawNN(sql_get(), size);
+		if (info == NULL)
+			goto delete_from_cleanup;
+		info->field_count = pk_len;
+		info->type = SQL_EPHEMERAL_INDEX_ALL;
 		if (is_view) {
-			/*
-			 * At this stage SELECT is already materialized
-			 * into ephemeral table, which has one additional
-			 * tail field (except for ones specified in view
-			 * format) which contains sequential ids. These ids
-			 * are required since selected values may turn out to
-			 * be non-unique. For instance:
-			 * CREATE TABLE t (id INT PRIMARY KEY, a INT);
-			 * INSERT INTO t VALUES (1, 1), (2, 1), (3, 1);
-			 * CREATE VIEW v AS SELECT a FROM t;
-			 * Meanwhile ephemeral tables feature PK covering ALL
-			 * fields of format, so without id materialization
-			 * processing is impossible. Then, results of
-			 * materialization are transferred to the table being
-			 * created below. So to fit tuples in it we must
-			 * account that id field as well. That's why pk_len
-			 * has one field more than view format.
-			 */
-			pk_len = space->def->field_count + 1;
-			parse->nMem += pk_len;
-			sqlVdbeAddOp2(v, OP_OpenTEphemeral, reg_eph,
-					  pk_len);
+			struct space_def *def = space->def;
+			for (uint32_t i = 0; i < def->field_count; ++i) {
+				struct field_def *field = &def->fields[i];
+				info->fields[i].type = field->type;
+				info->fields[i].coll_id = field->coll_id;
+			}
+			info->fields[pk_len - 1].type = FIELD_TYPE_UNSIGNED;
+			info->fields[pk_len - 1].coll_id = COLL_NONE;
 		} else {
-                        assert(space->index_count > 0);
-                        pk_info = sql_key_info_new_from_key_def(db,
-					space->index[0]->def->key_def);
-                        if (pk_info == NULL)
-                                goto delete_from_cleanup;
-                        pk_len = pk_info->part_count;
-                        parse->nMem += pk_len;
-			sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph,
-					  pk_len, 0,
-					  (char *)pk_info, P4_KEYINFO);
+			assert(space->index_count > 0);
+			struct key_def *def = space->index[0]->def->key_def;
+			for (uint32_t i = 0; i < def->part_count; i++) {
+				struct key_part *part = &def->parts[i];
+				info->fields[i].type = part->type;
+				info->fields[i].coll_id = part->coll_id;
+			}
 		}
+		parse->nMem += pk_len;
+		sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph, pk_len, 0,
+			      (char *)info, P4_SPACEINFO);
 
 		/* Construct a query to find the primary key for
 		 * every row to be deleted, based on the WHERE
@@ -295,8 +290,9 @@ sql_table_delete_from(struct Parse *parse, struct SrcList *tab_list,
 
 		/* Extract the primary key for the current row */
 		if (!is_view) {
-			struct key_part_def *part = pk_info->parts;
-			for (int i = 0; i < pk_len; i++, part++) {
+			struct key_def *def = space->index[0]->def->key_def;
+			for (int i = 0; i < pk_len; i++) {
+				struct key_part *part = &def->parts[i];
 				sqlVdbeAddOp3(v, OP_Column, tab_cursor,
 					      part->fieldno, reg_pk + i);
 			}
@@ -377,7 +373,6 @@ sql_table_delete_from(struct Parse *parse, struct SrcList *tab_list,
 		if (one_pass != ONEPASS_OFF) {
 			/* OP_Found will use an unpacked key. */
 			assert(key_len == pk_len);
-			assert(pk_info != NULL || space->def->opts.is_view);
 			sqlVdbeAddOp4Int(v, OP_NotFound, tab_cursor,
 					     addr_bypass, reg_key, key_len);
 

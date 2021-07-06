@@ -4039,6 +4039,22 @@ struct sql_key_info {
 	struct key_part_def parts[];
 };
 
+enum sql_ephemeral_index_type {
+	SQL_EPHEMERAL_INDEX_ALL		= 0,
+	SQL_EPHEMERAL_INDEX_ROWID	= 1,
+};
+
+struct sql_ephemeral_field_info {
+	enum field_type type;
+	uint32_t coll_id;
+};
+
+struct sql_ephemeral_space_info {
+	uint32_t field_count;
+	enum sql_ephemeral_index_type type;
+	struct sql_ephemeral_field_info fields[0];
+};
+
 /**
  * Allocate a key_info object sufficient for an index with
  * the given number of key columns.

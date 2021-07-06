@@ -407,6 +407,115 @@ sql_ephemeral_space_create(uint32_t field_count, struct sql_key_info *key_info)
 	return ephemer_new_space;
 }
 
+enum {
+	/*
+	 * Name of the fields will be "_COLUMN_1", "_COLUMN_2"
+	 * and so on. Due to this, length of each name is no more
+	 * than strlen("_COLUMN_") plus length of UINT32_MAX
+	 * turned to string, which is 10 and plus 1 for \0.
+	 */
+	NAME_LEN = 20,
+};
+
+struct space *
+sql_ephemeral_space_create2(struct sql_ephemeral_space_info *info)
+{
+	uint32_t field_count = info->field_count;
+	struct region *region = &fiber()->gc;
+	size_t svp = region_used(region);
+	uint32_t size = field_count * sizeof(struct field_def);
+	struct field_def *fields = region_aligned_alloc(region, size,
+							alignof(fields[0]));
+	if (fields == NULL) {
+		diag_set(OutOfMemory, size, "region_aligned_alloc", "fields");
+		return NULL;
+	}
+	char *names = region_alloc(region, field_count * NAME_LEN);
+	if (names == NULL) {
+		diag_set(OutOfMemory, size, "region_alloc", "names");
+		return NULL;
+	}
+	for (uint32_t i = 0; i < field_count; ++i) {
+		struct field_def *field = &fields[i];
+		field->name = &names[i * NAME_LEN];
+		sprintf(field->name, "_COLUMN_%d", i);
+		field->is_nullable = true;
+		field->nullable_action = ON_CONFLICT_ACTION_NONE;
+		field->default_value = NULL;
+		field->default_value_expr = NULL;
+		field->type = info->fields[i].type;
+		field->coll_id = info->fields[i].coll_id;
+	}
+
+	assert(info->type == SQL_EPHEMERAL_INDEX_ALL ||
+	       info->type == SQL_EPHEMERAL_INDEX_ROWID);
+	uint32_t part_count = info->type == SQL_EPHEMERAL_INDEX_ALL ?
+			      field_count : 1;
+	size = part_count * sizeof(struct key_part_def);
+	struct key_part_def *parts = region_aligned_alloc(region, size,
+							  alignof(parts[0]));
+	if (parts == NULL) {
+		diag_set(OutOfMemory, size, "region_aligned_alloc", "parts");
+		return NULL;
+	}
+	if (info->type == SQL_EPHEMERAL_INDEX_ALL) {
+		part_count = field_count;
+		for (uint32_t i = 0; i < field_count; ++i) {
+			struct key_part_def *part = &parts[i];
+			part->fieldno = i;
+			part->nullable_action = ON_CONFLICT_ACTION_NONE;
+			part->is_nullable = true;
+			part->exclude_null = false;
+			part->sort_order = SORT_ORDER_ASC;
+			part->path = NULL;
+			part->type = fields[i].type;
+			part->coll_id = fields[i].coll_id;
+		}
+	} else {
+		part_count = 1;
+		/* Rowid is always the last field. */
+		uint32_t rowid = field_count - 1;
+		struct key_part_def *part = &parts[0];
+		part->fieldno = rowid;
+		part->nullable_action = ON_CONFLICT_ACTION_NONE;
+		part->is_nullable = true;
+		part->exclude_null = false;
+		part->sort_order = SORT_ORDER_ASC;
+		part->path = NULL;
+		part->type = fields[rowid].type;
+		part->coll_id = fields[rowid].coll_id;
+	}
+
+	struct key_def *key_def = key_def_new(parts, part_count, false);
+	if (key_def == NULL)
+		return NULL;
+
+	struct index_def *index_def = index_def_new(0, 0, "ephemer_idx",
+						    strlen("ephemer_idx"), TREE,
+						    &index_opts_default,
+						    key_def, NULL);
+	key_def_delete(key_def);
+	if (index_def == NULL)
+		return NULL;
+
+	struct rlist key_list;
+	rlist_create(&key_list);
+	rlist_add_entry(&key_list, index_def, link);
+
+	struct space_def *space_def = space_def_new_ephemeral(field_count,
+							      fields);
+	if (space_def == NULL) {
+		index_def_delete(index_def);
+		return NULL;
+	}
+
+	struct space *space = space_new_ephemeral(space_def, &key_list);
+	index_def_delete(index_def);
+	space_def_delete(space_def);
+	region_truncate(region, svp);
+	return space;
+}
+
 int tarantoolsqlEphemeralInsert(struct space *space, const char *tuple,
 				    const char *tuple_end)
 {

@@ -226,9 +226,35 @@ sqlUpdate(Parse * pParse,		/* The parser context */
 	iEph = pParse->nTab++;
 	sqlVdbeAddOp2(v, OP_Null, 0, iPk);
 
+	uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+		pk_part_count * sizeof(struct sql_ephemeral_field_info);
+	struct sql_ephemeral_space_info *info =
+		sqlDbMallocRawNN(sql_get(), size);
+	if (info == NULL)
+		goto update_cleanup;
+	info->field_count = pk_part_count;
+	info->type = SQL_EPHEMERAL_INDEX_ALL;
+	if (is_view) {
+		for (uint32_t i = 0; i < def->field_count; ++i) {
+			struct field_def *field = &def->fields[i];
+			info->fields[i].type = field->type;
+			info->fields[i].coll_id = field->coll_id;
+		}
+		info->fields[pk_part_count - 1].type = FIELD_TYPE_UNSIGNED;
+		info->fields[pk_part_count - 1].coll_id = COLL_NONE;
+	} else {
+		assert(space->index_count > 0);
+		for (uint32_t i = 0; i < pPk->def->key_def->part_count; i++) {
+			struct key_part *part = &pPk->def->key_def->parts[i];
+			info->fields[i].type = part->type;
+			info->fields[i].coll_id = part->coll_id;
+		}
+	}
+
 	/* Address of the OpenEphemeral instruction. */
-	int addrOpen = sqlVdbeAddOp2(v, OP_OpenTEphemeral, reg_eph,
-					 pk_part_count);
+	int addrOpen = sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_eph,
+				     pk_part_count, 0, (char *)info,
+				     P4_SPACEINFO);
 	pWInfo = sqlWhereBegin(pParse, pTabList, pWhere, 0, 0,
 				   WHERE_ONEPASS_DESIRED, pk_cursor);
 	if (pWInfo == 0)

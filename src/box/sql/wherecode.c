@@ -1345,8 +1345,21 @@ sqlWhereCodeOneLoopStart(WhereInfo * pWInfo,	/* Complete information about the W
 		if ((pWInfo->wctrlFlags & WHERE_DUPLICATES_OK) == 0) {
 			cur_row_set = pParse->nTab++;
 			reg_row_set = ++pParse->nMem;
-			sqlVdbeAddOp2(v, OP_OpenTEphemeral,
-					  reg_row_set, pk_part_count);
+			uint32_t size = sizeof(struct sql_ephemeral_space_info) +
+				pk_part_count * sizeof(struct sql_ephemeral_field_info);
+			struct sql_ephemeral_space_info *info =
+				sqlDbMallocRawNN(sql_get(), size);
+			if (info == NULL)
+				return notReady;
+			info->field_count = pk_part_count;
+			info->type = SQL_EPHEMERAL_INDEX_ALL;
+			for (uint32_t i = 0; i < pk_part_count; i++) {
+				info->fields[i].type = pk_key_def->parts[i].type;
+				info->fields[i].coll_id = pk_key_def->parts[i].coll_id;
+			}
+			sqlVdbeAddOp4(v, OP_OpenTEphemeral, reg_row_set,
+				      pk_part_count, 0, (char *)info,
+				      P4_SPACEINFO);
 			sqlVdbeAddOp3(v, OP_IteratorOpen, cur_row_set, 0,
 					  reg_row_set);
 			sql_vdbe_set_p4_key_def(pParse, pk_key_def);

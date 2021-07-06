@@ -609,6 +609,7 @@ freeP4(sql * db, int p4type, void *p4)
 	case P4_INT64:
 	case P4_UINT64:
 	case P4_DYNAMIC:
+	case P4_SPACEINFO:
 	case P4_INTARRAY:{
 			sqlDbFree(db, p4);
 			break;

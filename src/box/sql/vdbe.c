@@ -2146,6 +2146,20 @@ case OP_Fetch: {
  * this opcode attempts to convert the value to the type.
  */
 case OP_ApplyType: {
+	assert(pOp->p4type == P4_STATIC || pOp->p4type == P4_DYNAMIC);
+	if (pOp->p4type == P4_STATIC) {
+		pIn1 = &aMem[pOp->p1];
+		struct sql_ephemeral_space_info *info = pOp->p4.space_info;
+		for (uint32_t i = 0; i < info->field_count; ++i, ++pIn1) {
+			enum field_type type = info->fields[i].type;
+			if (mem_cast_implicit(pIn1, type) != 0) {
+				diag_set(ClientError, ER_SQL_TYPE_MISMATCH,
+					 mem_str(pIn1), field_type_strs[type]);
+				goto abort_due_to_error;
+			}
+		}
+		break;
+	}
 	enum field_type *types = pOp->p4.types;
 	assert(types != NULL);
 	assert(types[pOp->p2] == field_type_MAX);
@@ -2525,9 +2539,13 @@ case OP_OpenTEphemeral: {
 	assert(pOp->p1 >= 0);
 	assert(pOp->p2 > 0);
 	assert(pOp->p4type != P4_KEYINFO || pOp->p4.key_info != NULL);
+	assert(pOp->p4type != P4_SPACEINFO || pOp->p4.space_info != NULL);
 
-	struct space *space = sql_ephemeral_space_create(pOp->p2,
-							 pOp->p4.key_info);
+	struct space *space;
+	if (pOp->p4type != P4_SPACEINFO && pOp->p4type != P4_STATIC)
+		space = sql_ephemeral_space_create(pOp->p2, pOp->p4.key_info);
+	else
+		space = sql_ephemeral_space_create2(pOp->p4.space_info);
 
 	if (space == NULL)
 		goto abort_due_to_error;

@@ -86,6 +86,8 @@ struct VdbeOp {
 		int (*xAdvance) (BtCursor *, int *);
 		/** Used when p4type is P4_KEYINFO. */
 		struct sql_key_info *key_info;
+		/** Used when p4type is P4_SPACEINFO. */
+		struct sql_ephemeral_space_info *space_info;
 		/** Used when p4type is P4_SPACEPTR. */
 		struct space *space;
 		/**
@@ -142,6 +144,7 @@ struct SubProgram {
 #define P4_PTR      (-18)	/* P4 is a generic pointer */
 #define P4_KEYINFO  (-19)       /* P4 is a pointer to sql_key_info structure. */
 #define P4_SPACEPTR (-20)       /* P4 is a space pointer */
+#define P4_SPACEINFO  (-21)
 
 /* Error message codes for OP_Halt */
 #define P5_ConstraintNotNull 1
