@@ -115,3 +115,9 @@ files["test/replication/replica_quorum.lua"] = {
         "nonexistent_uri",
     },
 }
+files["test/replication-luatest/replica_quorum.lua"] = {
+    globals = {
+        "INSTANCE_URI",
+        "nonexistent_uri",
+    },
+}
