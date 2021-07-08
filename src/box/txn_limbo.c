@@ -311,6 +311,19 @@ txn_limbo_checkpoint(const struct txn_limbo *limbo,
 	req->term = limbo->promote_greatest_term;
 }
 
+void
+txn_limbo_recover(struct txn_limbo *limbo,
+		  struct synchro_request *req)
+{
+	/*
+	 * Origin id cannot be deduced from row.replica_id
+	 * in a checkpoint, because all its rows have
+	 * a zero replica_id.
+	 */
+	req->origin_id = req->replica_id;
+	txn_limbo_process(limbo, req);
+}
+
 static void
 txn_limbo_write_synchro(struct txn_limbo *limbo, uint16_t type, int64_t lsn,
 			uint64_t term)
