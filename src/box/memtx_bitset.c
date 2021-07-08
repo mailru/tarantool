@@ -215,11 +215,11 @@ bitset_index_iterator_next(struct iterator *iterator, struct tuple **ret)
 #else /* #ifndef OLD_GOOD_BITSET */
 		struct tuple *tuple = value_to_tuple(value);
 #endif /* #ifndef OLD_GOOD_BITSET */
-		uint32_t iid = iterator->index->def->iid;
+		struct index *idx = iterator->index;
 		struct txn *txn = in_txn();
 		struct space *space = space_by_id(iterator->space_id);
 		bool is_rw = txn != NULL;
-		*ret = memtx_tx_tuple_clarify(txn, space, tuple, iid, 0, is_rw);
+		*ret = memtx_tx_tuple_clarify(txn, space, tuple, idx, 0, is_rw);
 	} while (*ret == NULL);
 
 	return 0;

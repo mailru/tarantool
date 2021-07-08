@@ -156,11 +156,11 @@ index_rtree_iterator_next(struct iterator *i, struct tuple **ret)
 		*ret = (struct tuple *) rtree_iterator_next(&itr->impl);
 		if (*ret == NULL)
 			break;
-		uint32_t iid = i->index->def->iid;
+		struct index *idx = i->index;
 		struct txn *txn = in_txn();
 		struct space *space = space_by_id(i->space_id);
 		bool is_rw = txn != NULL;
-		*ret = memtx_tx_tuple_clarify(txn, space, *ret, iid, 0, is_rw);
+		*ret = memtx_tx_tuple_clarify(txn, space, *ret, idx, 0, is_rw);
 	} while (*ret == NULL);
 	return 0;
 }
@@ -240,11 +240,10 @@ memtx_rtree_index_get(struct index *base, const char *key,
 			rtree_iterator_next(&iterator);
 		if (tuple == NULL)
 			break;
-		uint32_t iid = base->def->iid;
 		struct txn *txn = in_txn();
 		struct space *space = space_by_id(base->def->space_id);
 		bool is_rw = txn != NULL;
-		*result = memtx_tx_tuple_clarify(txn, space, tuple, iid,
+		*result = memtx_tx_tuple_clarify(txn, space, tuple, base,
 						 0, is_rw);
 	} while (*result == NULL);
 	rtree_iterator_destroy(&iterator);
