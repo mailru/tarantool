@@ -436,10 +436,24 @@ memtx_hash_index_create_iterator(struct index *base, enum iterator_type type,
 			light_index_iterator_begin(&index->hash_table, &it->iterator);
 			it->base.next = hash_iterator_ge;
 		}
+		/**
+		 * This iterator needs to be supported as a legacy.
+		 * The reason for tracking the gap is the same as below.
+		 */
+		memtx_tx_track_gap(in_txn(), space_by_id(it->base.space_id),
+				   index->base.def->iid, NULL, type,
+				   key, part_count);
 		break;
 	case ITER_ALL:
 		light_index_iterator_begin(&index->hash_table, &it->iterator);
 		it->base.next = hash_iterator_ge;
+		/**
+		 * Mark gap from some unknown point to infinity as visited
+		 * in order to go to read view in case of conflict.
+		 */
+		memtx_tx_track_gap(in_txn(), space_by_id(it->base.space_id),
+				   index->base.def->iid, NULL, type,
+				   key, part_count);
 		break;
 	case ITER_EQ:
 		assert(part_count > 0);
