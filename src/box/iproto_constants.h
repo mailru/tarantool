@@ -72,6 +72,7 @@ enum iproto_key {
 	IPROTO_GROUP_ID = 0x07,
 	IPROTO_TSN = 0x08,
 	IPROTO_FLAGS = 0x09,
+	IPROTO_STREAM_ID = 0x0a,
 	/* Leave a gap for other keys in the header. */
 	IPROTO_SPACE_ID = 0x10,
 	IPROTO_INDEX_ID = 0x11,
@@ -235,6 +236,12 @@ enum iproto_type {
 	IPROTO_NOP = 12,
 	/** Prepare SQL statement. */
 	IPROTO_PREPARE = 13,
+	/* Begin transaction */
+	IPROTO_TRANSACTION_BEGIN = 14,
+	/* Commit transaction */
+	IPROTO_TRANSACTION_COMMIT = 15,
+	/* Rollback transaction */
+	IPROTO_TRANSACTION_ROLLBACK = 16,
 	/** The maximum typecode used for box.stat() */
 	IPROTO_TYPE_STAT_MAX,
 
@@ -343,7 +350,9 @@ static inline bool
 iproto_type_is_dml(uint16_t type)
 {
 	return (type >= IPROTO_SELECT && type <= IPROTO_DELETE) ||
-		type == IPROTO_UPSERT || type == IPROTO_NOP;
+		type == IPROTO_UPSERT || type == IPROTO_NOP ||
+		(type >= IPROTO_TRANSACTION_BEGIN &&
+		 type <= IPROTO_TRANSACTION_ROLLBACK);
 }
 
 /**

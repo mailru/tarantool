@@ -63,6 +63,7 @@
 #include "execute.h"
 #include "errinj.h"
 #include "tt_static.h"
+#include "txn.h"
 
 enum {
 	IPROTO_SALT_SIZE = 32,
@@ -72,6 +73,37 @@ enum {
 enum {
 	 ENDPOINT_NAME_MAX = 10
 };
+
+struct iproto_connection;
+struct iproto_msg;
+
+struct stream {
+	/** Currently active stream transaction or NULL */
+	struct txn *txn;
+	/**
+	 * Pending requests for this stream, processed sequentially.
+	 * This field is accesable only from iproto thread.
+	 */
+	struct rlist pending_list;
+	/** Id of this stream, used as a key in streams hash table */
+	uint32_t stream_id;
+	/** This stream connection */
+	struct iproto_connection *connection;
+};
+
+/**
+ * Hash table definition for streams.
+ */
+#define mh_name _streams
+#define mh_key_t uint32_t
+#define mh_node_t struct stream *
+#define mh_arg_t int
+#define mh_hash(a, arg) ((*(a))->stream_id)
+#define mh_hash_key(a, arg) (a)
+#define mh_cmp(a, b, arg) ((*(a))->stream_id != (*(b))->stream_id)
+#define mh_cmp_key(a, b, arg) ((a) != ((*(b))->stream_id))
+#define MH_SOURCE
+#include "salad/mhash.h"
 
 /**
  * A position in connection output buffer.
@@ -117,6 +149,9 @@ struct iproto_thread {
 	/**
 	 * Static routes for this iproto thread
 	 */
+	struct cmsg_hop begin_route[2];
+	struct cmsg_hop commit_route[2];
+	struct cmsg_hop rollback_route[2];
 	struct cmsg_hop destroy_route[2];
 	struct cmsg_hop disconnect_route[2];
 	struct cmsg_hop misc_route[2];
@@ -303,6 +338,16 @@ struct iproto_msg
 	 * and the connection must be closed.
 	 */
 	bool close_connection;
+	/**
+	 * Rlist entry for pending list in stream.
+	 * If there is no active transaction all requests
+	 * processed in stream sequently. So if there is some
+	 * active request and no transaction started for this
+	 * stream - message is being added to pending list.
+	 */
+	struct rlist in_pending_list;
+	/** Stream that owns this message, or NULL. */
+	struct stream *stream;
 };
 
 static struct iproto_msg *
@@ -555,7 +600,36 @@ struct iproto_connection
 	char salt[IPROTO_SALT_SIZE];
 	/** Iproto connection thread */
 	struct iproto_thread *iproto_thread;
+	/**
+	 * Hash table that holds all streams for this connection.
+	 * This field is accesable only from iproto thread.
+	 */
+	struct mh_streams_t *streams;
+	/** Mempool for streams allocation */
+	struct mempool streams_pool;
 };
+
+static struct stream *
+iproto_stream_new(struct iproto_msg *msg)
+{
+	struct stream *stream = (struct stream *)
+		mempool_alloc(&msg->connection->streams_pool);
+	if (stream == NULL) {
+		diag_set(OutOfMemory, sizeof(*stream),
+			 "mempool_alloc", "stream");
+		return NULL;
+	}
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAMS_COUNT, ERRINJ_INT);
+	__atomic_add_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+	stream->txn = NULL;
+	rlist_create(&stream->pending_list);
+	stream->stream_id = msg->header.stream_id;
+	stream->connection = msg->connection;
+	return stream;
+}
 
 /**
  * Return true if we have not enough spare messages
@@ -572,9 +646,39 @@ static inline void
 iproto_msg_delete(struct iproto_msg *msg)
 {
 	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAMS_MSG_COUNT, ERRINJ_INT);
+	if (msg->stream != NULL)
+		__atomic_sub_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
 	mempool_free(&msg->connection->iproto_thread->iproto_msg_pool, msg);
 	iproto_resume(iproto_thread);
 }
+
+static void
+iproto_stream_delete(struct stream *stream)
+{
+	/**
+	 * We may still have some unprocessed requests in
+	 * case of rollback on disconnect. Clear them all.
+	 */
+	while (!rlist_empty(&stream->pending_list)) {
+		struct iproto_msg *next =
+			rlist_first_entry(&stream->pending_list,
+					  struct iproto_msg,
+					  in_pending_list);
+		rlist_del_entry(next, in_pending_list);
+		iproto_msg_delete(next);
+	}
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAMS_COUNT, ERRINJ_INT);
+	__atomic_sub_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+	mempool_free(&stream->connection->streams_pool, stream);
+}
+
 
 static struct iproto_msg *
 iproto_msg_new(struct iproto_connection *con)
@@ -592,8 +696,10 @@ iproto_msg_new(struct iproto_connection *con)
 			 "connection %s", sio_socketname(con->input.fd));
 		return NULL;
 	}
+	rlist_create(&msg->in_pending_list);
 	msg->close_connection = false;
 	msg->connection = con;
+	msg->stream = NULL;
 	rmean_collect(con->iproto_thread->rmean, IPROTO_REQUESTS, 1);
 	return msg;
 }
@@ -822,6 +928,51 @@ iproto_connection_input_buffer(struct iproto_connection *con)
 }
 
 /**
+ * Checks is message belongs to stream (stream_id != 0), and if it
+ * is so creates new/stream or gets stream from connection streams
+ * hash table. Puts message to stream pending messages list.
+ * @retval 0 - if message ready to push
+ *         1 - if message puts in pending list
+ *        -1 - if error occurs
+ */
+static int
+iproto_set_msg_stream(struct iproto_msg *msg)
+{
+	uint32_t stream_id = msg->header.stream_id;
+	if (stream_id == 0)
+		return 0;
+
+	bool skip_push;
+	struct iproto_connection *con = msg->connection;
+	struct stream *stream = NULL;
+	mh_int_t pos = mh_streams_find(con->streams, stream_id, 0);
+	if (pos == mh_end(con->streams)) {
+		stream = iproto_stream_new(msg);
+		if (stream == NULL)
+			return -1;
+		pos = mh_streams_put(con->streams, (const struct stream **)
+				     &stream, NULL, 0);
+		if (pos == mh_end(con->streams)) {
+			iproto_stream_delete(stream);
+			diag_set(OutOfMemory, pos + 1, "mh_streams_put",
+				 "mh_streams_node");
+			return -1;
+		}
+	}
+#ifndef NDEBUG
+	struct errinj *inj =
+		errinj(ERRINJ_IPROTO_STREAMS_MSG_COUNT, ERRINJ_INT);
+	__atomic_add_fetch(&inj->iparam, 1, __ATOMIC_SEQ_CST);
+#endif
+	stream = *mh_streams_node(con->streams, pos);
+	msg->stream = stream;
+	skip_push = !rlist_empty(&stream->pending_list);
+	rlist_add_tail_entry(&stream->pending_list, msg,
+			     in_pending_list);
+	return (skip_push ? 1 : 0);
+}
+
+/**
  * Enqueue all requests which were read up. If a request limit is
  * reached - stop the connection input even if not the whole batch
  * is enqueued. Else try to read more feeding read event to the
@@ -883,12 +1034,30 @@ err_msgpack:
 		msg->len = reqend - reqstart; /* total request length */
 
 		iproto_msg_decode(msg, &pos, reqend, &stop_input);
+
+		int rc = iproto_set_msg_stream(msg);
+		if (rc < 0) {
+			iproto_msg_delete(msg);
+			/*
+			 * Do not treat it as an error - just wait
+			 * until some of requests are finished.
+			 */
+			iproto_connection_stop_msg_max_limit(con);
+			return 0;
+		}
 		/*
-		 * This can't throw, but should not be
-		 * done in case of exception.
+		 * rc > 0, means that stream pending list is not empty,
+		 * skip push.
 		 */
-		cpipe_push_input(&con->iproto_thread->tx_pipe, &msg->base);
-		n_requests++;
+		if (rc == 0) {
+			/*
+			 * This can't throw, but should not be
+			 * done in case of exception.
+			 */
+			cpipe_push_input(&con->iproto_thread->tx_pipe, &msg->base);
+			n_requests++;
+		}
+
 		/* Request is parsed */
 		assert(reqend > reqstart);
 		assert(con->parse_size >= (size_t) (reqend - reqstart));
@@ -1130,6 +1299,16 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 		diag_set(OutOfMemory, sizeof(*con), "mempool_alloc", "con");
 		return NULL;
 	}
+	mempool_create(&con->streams_pool, &cord()->slabc,
+		       sizeof(struct stream));
+	con->streams = mh_streams_new();
+	if (con->streams == NULL) {
+		diag_set(OutOfMemory, sizeof(*(con->streams)),
+			 "mh_streams_new", "streams");
+		mempool_destroy(&con->streams_pool);
+		mempool_free(&con->iproto_thread->iproto_connection_pool, con);
+		return NULL;
+	}
 	con->iproto_thread = iproto_thread;
 	con->input.data = con->output.data = con;
 	con->loop = loop();
@@ -1178,6 +1357,9 @@ iproto_connection_delete(struct iproto_connection *con)
 	       con->obuf[0].iov[0].iov_base == NULL);
 	assert(con->obuf[1].pos == 0 &&
 	       con->obuf[1].iov[0].iov_base == NULL);
+
+	mh_streams_delete(con->streams);
+	mempool_destroy(&con->streams_pool);
 	mempool_free(&con->iproto_thread->iproto_connection_pool, con);
 }
 
@@ -1225,6 +1407,7 @@ static void
 iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 		  bool *stop_input)
 {
+	uint32_t stream_id;
 	uint8_t type;
 	struct iproto_thread *iproto_thread = msg->connection->iproto_thread;
 
@@ -1233,6 +1416,13 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	assert(*pos == reqend);
 
 	type = msg->header.type;
+	stream_id = msg->header.stream_id;
+	if (stream_id != 0 && type > IPROTO_TYPE_STAT_MAX &&
+	    type != IPROTO_PING) {
+		diag_set(ClientError, ER_UNKNOWN_REQUEST_TYPE,
+			 (uint32_t) type);
+		goto error;
+	}
 
 	/*
 	 * Parse request before putting it into the queue
@@ -1246,6 +1436,9 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	case IPROTO_UPDATE:
 	case IPROTO_DELETE:
 	case IPROTO_UPSERT:
+	case IPROTO_TRANSACTION_BEGIN:
+	case IPROTO_TRANSACTION_COMMIT:
+	case IPROTO_TRANSACTION_ROLLBACK:
 		if (xrow_decode_dml(&msg->header, &msg->dml,
 				    dml_request_key_map(type)))
 			goto error;
@@ -1331,6 +1524,30 @@ tx_process_disconnect(struct cmsg *m)
 {
 	struct iproto_connection *con =
 		container_of(m, struct iproto_connection, disconnect_msg);
+
+	/*
+	 * Rollback all active transactions in connection streams.
+	 * We can safely access to streams hash table from tx thread
+	 * here, because we have no access to it from `net_send_msg`
+	 * after connection closed.
+	 */
+	mh_int_t node;
+	mh_foreach(con->streams, node) {
+		struct stream *stream = *mh_streams_node(con->streams, node);
+		if (stream->txn != NULL) {
+			fiber_set_txn(fiber(), stream->txn);
+			/**
+			 * If rollback failes on disconnect we can only
+			 * log this not more.
+			 */
+			if (box_txn_rollback() != 0) {
+				diag_log();
+				diag_clear(diag_get());
+			}
+			fiber_set_txn(fiber(), NULL);
+		}
+	}
+
 	if (con->session != NULL) {
 		session_close(con->session);
 		if (! rlist_empty(&session_on_disconnect)) {
@@ -1345,6 +1562,12 @@ net_finish_disconnect(struct cmsg *m)
 {
 	struct iproto_connection *con =
 		container_of(m, struct iproto_connection, disconnect_msg);
+	mh_int_t node;
+	mh_foreach(con->streams, node) {
+		struct stream *stream = *mh_streams_node(con->streams, node);
+		iproto_stream_delete(stream);
+	}
+	mh_streams_clear(con->streams);
 	iproto_connection_try_to_start_destroy(con);
 }
 
@@ -1505,12 +1728,27 @@ tx_inject_delay(void)
 	});
 }
 
+static inline struct txn *
+tx_prepare_transaction_for_request(struct iproto_msg *msg)
+{
+	struct txn *txn = NULL;
+	if (msg != NULL && msg->stream != NULL) {
+		txn = msg->stream->txn;
+		if (txn != NULL)
+			msg->header.is_commit = false;
+		fiber_set_txn(fiber(), txn);
+	}
+	return txn;
+}
+
 static void
 tx_process1(struct cmsg *m)
 {
 	struct iproto_msg *msg = tx_accept_msg(m);
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
+
+	tx_prepare_transaction_for_request(msg);
 
 	struct tuple *tuple;
 	struct obuf_svp svp;
@@ -1523,11 +1761,122 @@ tx_process1(struct cmsg *m)
 		goto error;
 	if (tuple && tuple_to_obuf(tuple, out))
 		goto error;
+	fiber_set_txn(fiber(), NULL);
 	iproto_reply_select(out, &svp, msg->header.sync, ::schema_version,
 			    tuple != 0);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	fiber_set_txn(fiber(), NULL);
+	tx_reply_error(msg);
+}
+
+static void
+tx_process_begin(struct cmsg *m)
+{
+	struct iproto_msg *msg = tx_accept_msg(m);
+	struct obuf *out;
+	struct stream *stream = msg->stream;
+
+	if (tx_check_schema(msg->header.schema_version))
+		goto error;
+
+	if (stream == NULL) {
+		diag_set(ClientError, ER_PROTOCOL,
+			 "Missing stream_id for iproto "
+			 "`begin` request");
+		goto error;
+	}
+
+	if (stream->txn != NULL) {
+		diag_set(ClientError, ER_ACTIVE_TRANSACTION);
+		goto error;
+	}
+
+	if (box_txn_begin() != 0)
+		goto error;
+
+	stream->txn = in_txn();
+	trigger_clear(&stream->txn->fiber_on_stop);
+	fiber_set_txn(fiber(), NULL);
+
+	out = msg->connection->tx.p_obuf;
+	iproto_reply_ok(out, msg->header.sync, ::schema_version);
+	iproto_wpos_create(&msg->wpos, out);
+	return;
+error:
+	tx_reply_error(msg);
+}
+
+static void
+tx_process_commit(struct cmsg *m)
+{
+	struct iproto_msg *msg = tx_accept_msg(m);
+	struct obuf *out;
+	struct stream *stream = msg->stream;
+
+	if (tx_check_schema(msg->header.schema_version))
+		goto error;
+
+	if (stream == NULL) {
+		diag_set(ClientError, ER_PROTOCOL,
+			 "Missing stream_id for iproto "
+			 "`begin` request");
+		goto error;
+	}
+
+	if (stream->txn == NULL)
+		goto ok;
+
+	fiber_set_txn(fiber(), stream->txn);
+	if (box_txn_commit() != 0) {
+		stream->txn = in_txn();
+		goto error;
+	}
+
+	stream->txn = NULL;
+ok:
+	out = msg->connection->tx.p_obuf;
+	iproto_reply_ok(out, msg->header.sync, ::schema_version);
+	iproto_wpos_create(&msg->wpos, out);
+	return;
+error:
+	fiber_set_txn(fiber(), NULL);
+	tx_reply_error(msg);
+}
+
+static void
+tx_process_rollback(struct cmsg *m)
+{
+	struct iproto_msg *msg = tx_accept_msg(m);
+	struct obuf *out;
+	struct stream *stream = msg->stream;
+
+	if (tx_check_schema(msg->header.schema_version))
+		goto error;
+
+	if (stream == NULL) {
+		diag_set(ClientError, ER_PROTOCOL,
+			 "Missing stream_id for iproto "
+			 "`begin` request");
+		goto error;
+	}
+
+	if (stream->txn == NULL)
+		goto ok;
+
+	fiber_set_txn(fiber(), stream->txn);
+	if (box_txn_rollback() != 0)
+		goto error;
+
+	stream->txn = NULL;
+ok:
+	out = msg->connection->tx.p_obuf;
+	iproto_reply_ok(out, msg->header.sync, ::schema_version);
+	iproto_wpos_create(&msg->wpos, out);
+	return;
+error:
+	fiber_set_txn(fiber(), NULL);
 	tx_reply_error(msg);
 }
 
@@ -1544,6 +1893,7 @@ tx_process_select(struct cmsg *m)
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
+	tx_prepare_transaction_for_request(msg);
 	tx_inject_delay();
 	rc = box_select(req->space_id, req->index_id,
 			req->iterator, req->offset, req->limit,
@@ -1566,11 +1916,13 @@ tx_process_select(struct cmsg *m)
 		obuf_rollback_to_svp(out, &svp);
 		goto error;
 	}
+	fiber_set_txn(fiber(), NULL);
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	fiber_set_txn(fiber(), NULL);
 	tx_reply_error(msg);
 }
 
@@ -1589,9 +1941,12 @@ static void
 tx_process_call(struct cmsg *m)
 {
 	struct iproto_msg *msg = tx_accept_msg(m);
+	struct txn *txn = NULL;
+
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
+	txn = tx_prepare_transaction_for_request(msg);
 	/*
 	 * CALL/EVAL should copy its arguments so we can discard
 	 * input on yield to avoid stalling other connections by
@@ -1656,11 +2011,27 @@ tx_process_call(struct cmsg *m)
 		goto error;
 	}
 
+	if (txn != NULL) {
+		/*
+		 * Transaction could be commited
+		 * or rollbacked in `call` or `eval`
+		 */
+		msg->stream->txn = in_txn();
+		fiber_set_txn(fiber(), NULL);
+	}
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
 	return;
 error:
+	if (txn != NULL) {
+		/*
+		 * Transaction could be commited
+		 * or rollbacked in `call` or `eval`
+		 */
+		msg->stream->txn = in_txn();
+		fiber_set_txn(fiber(), NULL);
+	}
 	tx_reply_error(msg);
 }
 
@@ -1670,9 +2041,11 @@ tx_process_misc(struct cmsg *m)
 	struct iproto_msg *msg = tx_accept_msg(m);
 	struct iproto_connection *con = msg->connection;
 	struct obuf *out = con->tx.p_obuf;
+
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
+	tx_prepare_transaction_for_request(msg);
 	try {
 		struct ballot ballot;
 		switch (msg->header.type) {
@@ -1702,8 +2075,10 @@ tx_process_misc(struct cmsg *m)
 	} catch (Exception *e) {
 		tx_reply_error(msg);
 	}
+	fiber_set_txn(fiber(), NULL);
 	return;
 error:
+	fiber_set_txn(fiber(), NULL);
 	tx_reply_error(msg);
 }
 
@@ -1851,7 +2226,88 @@ net_send_msg(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
+	uint32_t stream_id = msg->header.stream_id;
+	mh_int_t pos;
+	struct stream *stream;
 
+	rlist_del_entry(msg, in_pending_list);
+	/*
+	 * If connection was closed, we stop processed remaining
+	 * stream messages, they will be deleted with stream in
+	 * `net_finish_disconnect`
+	 */
+	if (stream_id == 0 || con->state == IPROTO_CONNECTION_CLOSED)
+		goto send_msg;
+
+	pos = mh_streams_find(con->streams, stream_id, 0);
+	assert(pos != mh_end(con->streams));
+	stream = *mh_streams_node(con->streams, pos);
+
+	if (rlist_empty(&stream->pending_list)) {
+		/*
+		 * If no more messages for the current stream
+		 * and no transaction started, then delete it.
+		 */
+		if (stream->txn == NULL) {
+			mh_streams_remove(con->streams, (const struct stream **)
+					  &stream, 0);
+			iproto_stream_delete(stream);
+		}
+	} else {
+		/*
+		 * If there are new messages for this stream
+		 * then schedule their processing.
+		 */
+		struct iproto_msg * next =
+			rlist_first_entry(&stream->pending_list,
+					  struct iproto_msg,
+					  in_pending_list);
+		assert(next != NULL);
+		/*
+		 * It's very important to update wpos before push message
+		 * to tx thread. Otherwise, there may be a situation where
+		 * we reset obuf, but not resetting the corresponding svp.
+		 * For example we have two streams each of which processes
+		 * transaction. And there are several messages in each stream
+		 * which are waited in `pending_list`. For example we have the
+		 * following sequence of requests:
+		 * (0) Some previous requests which was ended long ago.
+		 * (1) Begin in stream_1
+		 * (2) Begin in stream_2
+		 * (3) Some requests in stream_1 and stream_2
+		 * (4) Commit in stream_1
+		 * (5) Commit in stream 2
+		 * (6) Request in stream_1
+		 * All previous requests came at the same time and have the
+		 * same wpos. When (1) starts to be processed in tx thread, he
+		 * reset obuf, which was used in (0). Svp of this obuf was
+		 * previously reseted in `iproto_flush`. All this requests will
+		 * use the same one obuf.
+		 * (7) Request in stream_2
+		 * Request (7) comes later, after one of the previous requests
+		 * is processed, so it can have (and has for our example) other
+		 * wpos. If transaction in stream_1 conflicts with transaction
+		 * in stream_2, (4) finishes later then (5). So request (7)
+		 * begins before request (6), and because it has other wpos it
+		 * change tx.p_obuf in connection and reset obuf, which was
+		 * used by requests (1 -5). So far, so good, since query (7)
+		 * has the actual wpos. But if (6) starts immidiatly, and we
+		 * don't update it wpos in next line, it will have incorrect
+		 * wpos. It will update tx.p_obuf again and reset obuf which
+		 * is used by request (7), moreover svp of (1-5) was not
+		 * reseted, but (6) used obuf to which this not reseted svp
+		 * belongs!. If we update wpos here (6) uses same obuf with (7),
+		 * svp of obuf, which was used in (1 - 5) will be reseted in
+		 * `iproto_flush` after (7) and (6) are processed (expected
+		 * behavior).
+		 */
+		next->wpos = con->wpos;
+		cpipe_push_input(&con->iproto_thread->tx_pipe,
+				 &next->base);
+		cpipe_flush_input(&con->iproto_thread->tx_pipe);
+	}
+
+send_msg:
 	if (msg->len != 0) {
 		/* Discard request (see iproto_enqueue_batch()). */
 		msg->p_ibuf->rpos += msg->len;
@@ -2162,6 +2618,18 @@ iproto_session_push(struct session *session, struct port *port)
 static inline void
 iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 {
+	iproto_thread->begin_route[0] =
+		{ tx_process_begin, &iproto_thread->net_pipe };
+	iproto_thread->begin_route[1] =
+		{ net_send_msg, NULL };
+	iproto_thread->commit_route[0] =
+		{ tx_process_commit, &iproto_thread->net_pipe };
+	iproto_thread->commit_route[1] =
+		{ net_send_msg, NULL };
+	iproto_thread->rollback_route[0] =
+		{ tx_process_rollback, &iproto_thread->net_pipe };
+	iproto_thread->rollback_route[1] =
+		{ net_send_msg, NULL };
 	iproto_thread->destroy_route[0] =
 		{ tx_process_destroy, &iproto_thread->net_pipe };
 	iproto_thread->destroy_route[1] =
@@ -2225,6 +2693,9 @@ iproto_thread_init_routes(struct iproto_thread *iproto_thread)
 	iproto_thread->dml_route[12] = NULL;
 	/* IPROTO_PREPARE */
 	iproto_thread->dml_route[13] = iproto_thread->sql_route;
+	iproto_thread->dml_route[14] = iproto_thread->begin_route;
+	iproto_thread->dml_route[15] = iproto_thread->commit_route;
+	iproto_thread->dml_route[16] = iproto_thread->rollback_route;
 	iproto_thread->connect_route[0] =
 		{ tx_process_connect, &iproto_thread->net_pipe };
 	iproto_thread->connect_route[1] = { net_send_greeting, NULL };

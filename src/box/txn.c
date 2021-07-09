@@ -303,7 +303,7 @@ txn_begin(void)
 	txn->fiber = NULL;
 	fiber_set_txn(fiber(), txn);
 	/* fiber_on_yield is initialized by engine on demand */
-	trigger_create(&txn->fiber_on_stop, txn_on_stop, NULL, NULL);
+	trigger_create(&txn->fiber_on_stop, txn_on_stop, txn, NULL);
 	trigger_add(&fiber()->on_stop, &txn->fiber_on_stop);
 	/*
 	 * By default all transactions may yield.
@@ -1016,7 +1016,7 @@ txn_can_yield(struct txn *txn, bool set)
 		trigger_clear(&txn->fiber_on_yield);
 	} else if (!set && could) {
 		txn_clear_flags(txn, TXN_CAN_YIELD);
-		trigger_create(&txn->fiber_on_yield, txn_on_yield, NULL, NULL);
+		trigger_create(&txn->fiber_on_yield, txn_on_yield, txn, NULL);
 		trigger_add(&fiber()->on_yield, &txn->fiber_on_yield);
 	}
 	return could;
@@ -1216,9 +1216,8 @@ txn_savepoint_release(struct txn_savepoint *svp)
 static int
 txn_on_stop(struct trigger *trigger, void *event)
 {
-	(void) trigger;
 	(void) event;
-	struct txn *txn = in_txn();
+	struct txn *txn = (struct txn *) trigger->data;
 	assert(txn->signature == TXN_SIGNATURE_UNKNOWN);
 	txn->signature = TXN_SIGNATURE_ROLLBACK;
 	txn_rollback(txn);
@@ -1246,9 +1245,8 @@ txn_on_stop(struct trigger *trigger, void *event)
 static int
 txn_on_yield(struct trigger *trigger, void *event)
 {
-	(void) trigger;
 	(void) event;
-	struct txn *txn = in_txn();
+	struct txn *txn = (struct txn *) trigger->data;
 	assert(txn != NULL);
 	assert(!txn_has_flag(txn, TXN_CAN_YIELD));
 	txn_rollback_to_svp(txn, NULL);
