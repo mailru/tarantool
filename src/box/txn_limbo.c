@@ -37,6 +37,15 @@
 
 struct txn_limbo txn_limbo;
 
+static void
+txn_limbo_promote_create(struct txn_limbo_promote *pmt)
+{
+	vclock_create(&pmt->terms_applied);
+	vclock_create(&pmt->terms_infly);
+	pmt->term_max = 0;
+	pmt->term_max_infly = 0;
+}
+
 static inline void
 txn_limbo_create(struct txn_limbo *limbo)
 {
@@ -45,11 +54,11 @@ txn_limbo_create(struct txn_limbo *limbo)
 	limbo->owner_id = REPLICA_ID_NIL;
 	fiber_cond_create(&limbo->wait_cond);
 	vclock_create(&limbo->vclock);
-	vclock_create(&limbo->promote_term_map);
-	limbo->promote_greatest_term = 0;
 	limbo->confirmed_lsn = 0;
 	limbo->rollback_count = 0;
 	limbo->is_in_rollback = false;
+
+	txn_limbo_promote_create(&limbo->promote);
 }
 
 bool
@@ -305,10 +314,12 @@ void
 txn_limbo_checkpoint(const struct txn_limbo *limbo,
 		     struct synchro_request *req)
 {
+	const struct txn_limbo_promote *pmt = &limbo->promote;
+
 	req->type = IPROTO_PROMOTE;
 	req->replica_id = limbo->owner_id;
 	req->lsn = limbo->confirmed_lsn;
-	req->term = limbo->promote_greatest_term;
+	req->term = pmt->term_max_infly;
 }
 
 void
@@ -696,27 +707,38 @@ complete:
 	return 0;
 }
 
-void
-txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req)
+static int
+limbo_op_filter(struct txn_limbo *limbo, const struct synchro_request *req)
 {
-	uint64_t term = req->term;
+	struct txn_limbo_promote *pmt = &limbo->promote;
 	uint32_t origin = req->origin_id;
+	uint64_t term = req->term;
+
 	if (txn_limbo_replica_term(limbo, origin) < term) {
-		vclock_follow(&limbo->promote_term_map, origin, term);
-		if (term > limbo->promote_greatest_term)
-			limbo->promote_greatest_term = term;
+		vclock_follow(&pmt->terms_infly, origin, term);
+		if (term > pmt->term_max_infly)
+			pmt->term_max_infly = term;
 	} else if (iproto_type_is_promote_request(req->type) &&
-		   limbo->promote_greatest_term > 1) {
-		/* PROMOTE for outdated term. Ignore. */
-		say_info("RAFT: ignoring %s request from instance "
+		   pmt->term_max_infly > 1) {
+		say_info("RAFT: declining %s request from instance "
 			 "id %u for term %llu. Greatest term seen "
 			 "before (%llu) is bigger.",
-			 iproto_type_name(req->type), origin, (long long)term,
-			 (long long)limbo->promote_greatest_term);
-		return;
+			 iproto_type_name(req->type), origin,
+			 (long long)term,
+			 (long long)pmt->term_max_infly);
+		diag_set(ClientError, ER_UNSUPPORTED, "RAFT",
+			 "backward terms");
+		return -1;
 	}
 
+	return 0;
+}
+
+static int
+limbo_op_apply(struct txn_limbo *limbo, const struct synchro_request *req)
+{
 	int64_t lsn = req->lsn;
+
 	if (req->replica_id == REPLICA_ID_NIL) {
 		/*
 		 * The limbo was empty on the instance issuing the request.
@@ -731,7 +753,7 @@ txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req)
 		 * confirm right on synchronous transaction recovery.
 		 */
 		if (!iproto_type_is_promote_request(req->type))
-			return;
+			goto out;
 		/*
 		 * Promote has a bigger term, and tries to steal the limbo. It
 		 * means it probably was elected with a quorum, and it makes no
@@ -740,6 +762,7 @@ txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req)
 		 */
 		lsn = 0;
 	}
+
 	switch (req->type) {
 	case IPROTO_CONFIRM:
 		txn_limbo_read_confirm(limbo, lsn);
@@ -754,9 +777,99 @@ txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req)
 		txn_limbo_read_demote(limbo, lsn);
 		break;
 	default:
-		unreachable();
+		panic("limbo: unreacheable stage detected");
+		break;
 	}
-	return;
+
+
+out:
+	struct txn_limbo_promote *pmt = &limbo->promote;
+	uint32_t replica_id = req->origin_id;
+	uint64_t term = req->term;
+
+	uint64_t v = vclock_get(&pmt->terms_applied, replica_id);
+	if (v < term) {
+		vclock_follow(&pmt->terms_applied, replica_id, term);
+		if (term > pmt->term_max)
+			pmt->term_max = term;
+	}
+	return 0;
+}
+
+static int
+limbo_op_error(struct txn_limbo *limbo, const struct synchro_request *req)
+{
+	struct txn_limbo_promote *pmt = &limbo->promote;
+	uint32_t replica_id = req->origin_id;
+	/*
+	 * Restore to the applied value in case of error,
+	 * this will allow to reapply the entry when remote
+	 * node get error and try to resend data.
+	 */
+	uint64_t v = vclock_get(&pmt->terms_applied, replica_id);
+	vclock_reset(&pmt->terms_infly, replica_id, v);
+
+	/*
+	 * The max value has to be recalculated in a linear
+	 * form, the errors should not happen frequently so
+	 * this is not a hot path.
+	 */
+	int64_t maxv = 0;
+	struct vclock_iterator it;
+	vclock_iterator_init(&it, &pmt->terms_infly);
+	vclock_foreach(&it, r)
+		maxv = r.lsn > maxv ? r.lsn : maxv;
+	pmt->term_max_infly = maxv;
+	return 0;
+}
+
+static int (*limbo_apply_ops[LIMBO_OP_MAX])
+	(struct txn_limbo *limbo, const struct synchro_request *req) = {
+	[LIMBO_OP_FILTER_BIT]	= limbo_op_filter,
+	[LIMBO_OP_APPLY_BIT]	= limbo_op_apply,
+	[LIMBO_OP_ERROR_BIT]	= limbo_op_error,
+};
+
+static const char *
+limbo_apply_op_str(unsigned int bit)
+{
+	static const char *str[] = {
+		[LIMBO_OP_FILTER_BIT]	= "LIMBO_OP_FILTER",
+		[LIMBO_OP_APPLY_BIT]	= "LIMBO_OP_APPLY",
+		[LIMBO_OP_ERROR_BIT]	= "LIMBO_OP_ERROR",
+	};
+
+	if (bit < lengthof(limbo_apply_ops))
+		return str[bit];
+
+	return "UNKNOWN";
+}
+
+int
+txn_limbo_apply(struct txn_limbo *limbo,
+		const struct synchro_request *req,
+		unsigned int op_mask)
+{
+	unsigned int mask = op_mask & LIMBO_OP_MASK;
+	unsigned int bit = LIMBO_OP_MIN;
+
+	while (mask) {
+		if (mask & 1) {
+			if (limbo_apply_ops[bit] == NULL)
+				panic("limbo: empty apply operation");
+			say_info("limbo: apply operation %s",
+				 limbo_apply_op_str(bit));
+			if (limbo_apply_ops[bit](limbo, req) != 0) {
+				if (op_mask & LIMBO_OP_ATTR_PANIC)
+					panic("limbo: panicing op");
+				return -1;
+			}
+		}
+		mask >>= 1;
+		bit++;
+	};
+
+	return 0;
 }
 
 void

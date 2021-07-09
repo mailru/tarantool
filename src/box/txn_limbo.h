@@ -76,6 +76,40 @@ txn_limbo_entry_is_complete(const struct txn_limbo_entry *e)
 }
 
 /**
+ * To keep state of promote requests to handle split-brain
+ * situation and other errors.
+ */
+struct txn_limbo_promote {
+	/**
+	 * Latest terms received with PROMOTE entries from remote instances.
+	 * Limbo uses them to filter out the transactions coming not from the
+	 * limbo owner, but so outdated that they are rolled back everywhere
+	 * except outdated nodes.
+	 */
+	struct vclock terms_applied;
+	/**
+	 * Infly replresentation of @a terms_applied, the term might
+	 * be not yet written to WAL but already seen.
+	 */
+	struct vclock terms_infly;
+	/**
+	 * The biggest PROMOTE term seen by the instance and persisted in WAL.
+	 * It is related to raft term, but not the same. Synchronous replication
+	 * represented by the limbo is interested only in the won elections
+	 * ended with PROMOTE request.
+	 * It means the limbo's term might be smaller than the raft term, while
+	 * there are ongoing elections, or the leader is already known and this
+	 * instance hasn't read its PROMOTE request yet. During other times the
+	 * limbo and raft are in sync and the terms are the same.
+	 */
+	uint64_t term_max;
+	/**
+	 * Infly representation of @a term_max.
+	 */
+	uint64_t term_max_infly;
+};
+
+/**
  * Limbo is a place where transactions are stored, which are
  * finished, but not committed nor rolled back. These are
  * synchronous transactions in progress of collecting ACKs from
@@ -130,23 +164,9 @@ struct txn_limbo {
 	 */
 	struct vclock vclock;
 	/**
-	 * Latest terms received with PROMOTE entries from remote instances.
-	 * Limbo uses them to filter out the transactions coming not from the
-	 * limbo owner, but so outdated that they are rolled back everywhere
-	 * except outdated nodes.
+	 * To track PROMOTE requests.
 	 */
-	struct vclock promote_term_map;
-	/**
-	 * The biggest PROMOTE term seen by the instance and persisted in WAL.
-	 * It is related to raft term, but not the same. Synchronous replication
-	 * represented by the limbo is interested only in the won elections
-	 * ended with PROMOTE request.
-	 * It means the limbo's term might be smaller than the raft term, while
-	 * there are ongoing elections, or the leader is already known and this
-	 * instance hasn't read its PROMOTE request yet. During other times the
-	 * limbo and raft are in sync and the terms are the same.
-	 */
-	uint64_t promote_greatest_term;
+	struct txn_limbo_promote promote;
 	/**
 	 * Maximal LSN gathered quorum and either already confirmed in WAL, or
 	 * whose confirmation is in progress right now. Any attempt to confirm
@@ -218,7 +238,8 @@ txn_limbo_last_entry(struct txn_limbo *limbo)
 static inline uint64_t
 txn_limbo_replica_term(const struct txn_limbo *limbo, uint32_t replica_id)
 {
-	return vclock_get(&limbo->promote_term_map, replica_id);
+	const struct txn_limbo_promote *pmt = &limbo->promote;
+	return vclock_get(&pmt->terms_infly, replica_id);
 }
 
 /**
@@ -229,8 +250,9 @@ static inline bool
 txn_limbo_is_replica_outdated(const struct txn_limbo *limbo,
 			      uint32_t replica_id)
 {
+	const struct txn_limbo_promote *pmt = &limbo->promote;
 	return txn_limbo_replica_term(limbo, replica_id) <
-	       limbo->promote_greatest_term;
+	       pmt->term_max_infly;
 }
 
 /**
@@ -300,9 +322,44 @@ txn_limbo_ack(struct txn_limbo *limbo, uint32_t replica_id, int64_t lsn);
 int
 txn_limbo_wait_complete(struct txn_limbo *limbo, struct txn_limbo_entry *entry);
 
+enum {
+	LIMBO_OP_MIN		= 0,
+	LIMBO_OP_FILTER_BIT	= 0,
+	LIMBO_OP_APPLY_BIT	= 1,
+	LIMBO_OP_ERROR_BIT	= 2,
+	LIMBO_OP_MAX,
+
+	LIMBO_OP_ATTR_MIN	= LIMBO_OP_MAX,
+	LIMBO_OP_ATTR_PANIC_BIT	= LIMBO_OP_ATTR_MIN + 1,
+	LIMBO_OP_ATTR_MAX,
+};
+
+enum {
+	LIMBO_OP_FILTER		= (1u << LIMBO_OP_FILTER_BIT),
+	LIMBO_OP_APPLY		= (1u << LIMBO_OP_APPLY_BIT),
+	LIMBO_OP_ERROR		= (1u << LIMBO_OP_ERROR_BIT),
+	LIMBO_OP_MASK		= (1u << LIMBO_OP_MAX) - 1,
+
+	LIMBO_OP_ATTR_PANIC	= (1u << LIMBO_OP_ATTR_PANIC_BIT),
+};
+
+/**
+ * Apply a synchronous replication request, the @a op_mask
+ * specifies stages to process.
+ */
+int
+txn_limbo_apply(struct txn_limbo *limbo,
+		const struct synchro_request *req,
+		unsigned int op_mask);
+
 /** Execute a synchronous replication request. */
-void
-txn_limbo_process(struct txn_limbo *limbo, const struct synchro_request *req);
+static inline int
+txn_limbo_process(struct txn_limbo *limbo,
+		  const struct synchro_request *req)
+{
+	const int op_mask = LIMBO_OP_FILTER | LIMBO_OP_APPLY;
+	return txn_limbo_apply(limbo, req, op_mask);
+}
 
 /**
  * Waiting for confirmation of all "sync" transactions

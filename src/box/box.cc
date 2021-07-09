@@ -428,7 +428,8 @@ wal_stream_apply_synchro_row(struct wal_stream *stream, struct xrow_header *row)
 		say_error("couldn't decode a synchro request");
 		return -1;
 	}
-	txn_limbo_process(&txn_limbo, &syn_req);
+	if (txn_limbo_process(&txn_limbo, &syn_req) != 0)
+		return -1;
 	return 0;
 }
 
@@ -1701,7 +1702,8 @@ promote:
 				.lsn = wait_lsn,
 				.term = term,
 			};
-			txn_limbo_process(&txn_limbo, &req);
+			if (txn_limbo_process(&txn_limbo, &req) != 0)
+				return -1;
 			assert(txn_limbo_is_empty(&txn_limbo));
 		}
 	}
