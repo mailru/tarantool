@@ -465,23 +465,68 @@ memtx_tx_story_delete_del_stmt(struct memtx_story *story)
 
 /**
  * Link a @a story with @a older_story in @a index (in both directions).
+ * @a older_story is allowed to be NULL.
  */
 static void
 memtx_tx_story_link(struct memtx_story *story,
-		    struct memtx_story *older_story,
+		    struct memtx_story *old_story,
 		    uint32_t index)
 {
 	assert(index < story->index_count);
-	assert(older_story == NULL || index < older_story->index_count);
+	assert(old_story == NULL || index < old_story->index_count);
 	struct memtx_story_link *link = &story->link[index];
 	/* Must be unlinked. */
 	assert(link->older_story == NULL);
-	link->older_story = older_story;
-	if (older_story != NULL) {
-		older_story->link[index].newer_story = story;
+	link->older_story = old_story;
+	if (old_story != NULL) {
+		old_story->link[index].newer_story = story;
 		/* Rebind gap records to the top of the list */
 		rlist_splice(&link->nearby_gaps,
-			     &older_story->link[index].nearby_gaps);
+			     &old_story->link[index].nearby_gaps);
+	}
+}
+
+/**
+ * Add @a stmt to the list of deleting statements in @a story.
+ */
+static void
+memtx_tx_story_add_del_stmt(struct memtx_story *story, struct txn_stmt *stmt)
+{
+	assert(story != NULL);
+	assert(stmt->del_story == NULL);
+	assert(stmt->next_in_del_list = NULL);
+
+	stmt->del_story = story;
+	stmt->next_in_del_list = story->del_stmt;
+	story->del_stmt = stmt;
+}
+
+/**
+ * Link a @a story with @a older_story in @a primary index, with a @a stmt -
+ * the statement that adds the story and deletes older.
+ * @a older_story is allowed to be NULL.
+ */
+static void
+memtx_tx_story_link_pk(struct memtx_story *story,
+		       struct memtx_story *older_story,
+		       struct txn_stmt *stmt)
+{
+	struct memtx_story_link *link = &story->link[0];
+	/* Must be unlinked. */
+	assert(story->add_stmt == NULL);
+	assert(link->older_story == NULL);
+	assert(stmt->add_story == NULL);
+	assert(stmt->del_story == NULL);
+	assert(stmt->next_in_del_list == NULL);
+	story->add_stmt = stmt;
+	stmt->add_story = story;
+	link->older_story = older_story;
+	if (older_story != NULL) {
+		older_story->link[0].newer_story = story;
+		memtx_tx_story_add_del_stmt(older_story, stmt);
+		/* Rebind gap records to the top of the list */
+		rlist_splice(&link->nearby_gaps,
+			     &older_story->link[0].nearby_gaps);
 	}
 }
 
@@ -604,7 +649,6 @@ memtx_tx_story_gc_step()
 
 	/* Unlink and delete the story */
 	memtx_tx_story_full_unlink(story);
-
 	memtx_tx_story_delete(story);
 }
 
