@@ -1,7 +1,6 @@
-#ifndef TARANTOOL_LIB_CORE_MP_USER_TYPES_H_INCLUDED
-#define TARANTOOL_LIB_CORE_MP_USER_TYPES_H_INCLUDED
+#pragma once
 /*
- * Copyright 2019, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2021, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -31,21 +30,24 @@
  * SUCH DAMAGE.
  */
 
-#include "msgpuck.h"
+#include "lib/core/datetime.h"
+#include "utils.h"
 
-/**
- * MessagePack extension type. Used as a subtype after MP_EXT
- * format specifier.
- * Values in range [-128, -1] are reserved.
- * You may assign values in range [0, 127]
- */
-enum mp_extension_type {
-    MP_UNKNOWN_EXTENSION = 0,
-    MP_DECIMAL = 1,
-    MP_UUID = 2,
-    MP_ERROR = 3,
-    MP_DATETIME = 4,
-    mp_extension_type_MAX,
-};
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
 
-#endif
+extern uint32_t CTID_DATETIME_TZ;
+extern uint32_t CTID_DURATION;
+
+struct lua_State;
+
+struct datetime_t*
+luaL_pushdatetime(struct lua_State *L);
+
+void
+tarantool_lua_datetime_init(struct lua_State *L);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */

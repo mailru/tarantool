@@ -1,7 +1,5 @@
-#ifndef TARANTOOL_LIB_CORE_MP_USER_TYPES_H_INCLUDED
-#define TARANTOOL_LIB_CORE_MP_USER_TYPES_H_INCLUDED
 /*
- * Copyright 2019, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2021, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -30,22 +28,43 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include "datetime.h"
 
-#include "msgpuck.h"
+#include <assert.h>
 
-/**
- * MessagePack extension type. Used as a subtype after MP_EXT
- * format specifier.
- * Values in range [-128, -1] are reserved.
- * You may assign values in range [0, 127]
- */
-enum mp_extension_type {
-    MP_UNKNOWN_EXTENSION = 0,
-    MP_DECIMAL = 1,
-    MP_UUID = 2,
-    MP_ERROR = 3,
-    MP_DATETIME = 4,
-    mp_extension_type_MAX,
-};
+#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
 
-#endif
+uint32_t CTID_DATETIME_TZ = 0;
+uint32_t CTID_DURATION = 0;
+
+struct datetime_t *
+luaL_pushdatetime(struct lua_State *L)
+{
+	return luaL_pushcdata(L, CTID_DATETIME_TZ);
+}
+
+void
+tarantool_lua_datetime_init(struct lua_State *L)
+{
+	int rc = luaL_cdef(L, "struct datetime_t {"
+				"int secs;"
+				"int nsec;"
+				"int offset;"
+			  "};");
+	assert(rc == 0);
+	(void) rc;
+	CTID_DATETIME_TZ = luaL_ctypeid(L, "struct datetime_t");
+	assert(CTID_DATETIME_TZ != 0);
+
+
+	rc = luaL_cdef(L, "struct t_datetime_duration {"
+				"int secs;"
+				"int nsec;"
+			  "};");
+	assert(rc == 0);
+	(void) rc;
+	CTID_DURATION = luaL_ctypeid(L, "struct t_datetime_duration");
+	assert(CTID_DURATION != 0);
+}
