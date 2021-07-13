@@ -2526,8 +2526,27 @@ case OP_OpenTEphemeral: {
 	assert(pOp->p2 > 0);
 	assert(pOp->p4type != P4_KEYINFO || pOp->p4.key_info != NULL);
 
-	struct space *space = sql_ephemeral_space_create(pOp->p2,
-							 pOp->p4.key_info);
+	struct space *space;
+	if (pOp->p4type == P4_SPACEINFO || pOp->p4type == P4_STATIC) {
+		enum field_type *types = pOp->p4.fields->types;
+		uint32_t *coll_ids = pOp->p4.fields->coll_ids;
+		uint32_t len = pOp->p2;
+		struct space_def *space_def =
+			sql_space_def_new_ephemeral(len, types, coll_ids);
+		if (pOp->p5 == OPFLAG_ROWID_PK) {
+			types += len - 1;
+			coll_ids += len - 1;
+			len = 1;
+		}
+		struct index_def *index_def =
+			sql_index_def_new_ephemeral(len, types, coll_ids);
+		struct rlist key_list;
+		rlist_create(&key_list);
+		rlist_add_entry(&key_list, index_def, link);
+		space = space_new_ephemeral(space_def, &key_list);
+	} else {
+		space = sql_ephemeral_space_create(pOp->p2, pOp->p4.key_info);
+	}
 
 	if (space == NULL)
 		goto abort_due_to_error;

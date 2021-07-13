@@ -2248,6 +2248,11 @@ struct Parse {
 #define OPFLAG_SYSTEMSP      0x20	/* OP_Open**: set if space pointer
 					 * points to system space.
 					 */
+/**
+ * If this flag is set, than in OP_OpenTEphemeral we should use rowid as the
+ * only part of primary index.
+ */
+#define OPFLAG_ROWID_PK		0x01
 
 /**
  * Prepare vdbe P5 flags for OP_{IdxInsert, IdxReplace, Update}
@@ -4037,6 +4042,11 @@ struct sql_key_info {
 	uint32_t part_count;
 	/** Definition of the key parts. */
 	struct key_part_def parts[];
+};
+
+struct fields_info {
+	enum field_type *types;
+	uint32_t *coll_ids;
 };
 
 /**

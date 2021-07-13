@@ -73,6 +73,14 @@ int tarantoolsqlRenameTrigger(const char *zTriggerName,
 struct space *
 sql_ephemeral_space_create(uint32_t filed_count, struct sql_key_info *key_info);
 
+struct space_def *
+sql_space_def_new_ephemeral(uint32_t field_count, enum field_type *types,
+			    uint32_t *coll_ids);
+
+struct index_def *
+sql_index_def_new_ephemeral(uint32_t part_count, enum field_type *types,
+			    uint32_t *coll_ids);
+
 /**
  * Insert tuple into ephemeral space.
  * In contrast to ordinary spaces, there is no need to create and

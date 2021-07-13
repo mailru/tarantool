@@ -93,6 +93,7 @@ struct VdbeOp {
 		 * doing a cast.
 		 */
 		enum field_type *types;
+		struct fields_info *fields;
 	} p4;
 #ifdef SQL_ENABLE_EXPLAIN_COMMENTS
 	char *zComment;		/* Comment to improve readability */
@@ -142,6 +143,11 @@ struct SubProgram {
 #define P4_PTR      (-18)	/* P4 is a generic pointer */
 #define P4_KEYINFO  (-19)       /* P4 is a pointer to sql_key_info structure. */
 #define P4_SPACEPTR (-20)       /* P4 is a space pointer */
+/**
+ * P4 is a structure that contains information about types and collations of
+ * fields.
+ */
+#define P4_SPACEINFO (-20)
 
 /* Error message codes for OP_Halt */
 #define P5_ConstraintNotNull 1
