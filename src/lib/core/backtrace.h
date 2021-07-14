@@ -31,6 +31,7 @@
  * SUCH DAMAGE.
  */
 #include "trivia/config.h"
+#include "trivia/util.h"
 #include <stddef.h>
 
 #if defined(__cplusplus)
@@ -41,7 +42,7 @@ extern "C" {
 #include <coro.h>
 
 char *
-backtrace(char *start, size_t size);
+backtrace_to_buf(char *start, size_t size);
 
 void print_backtrace(void);
 
@@ -54,6 +55,13 @@ backtrace_foreach(backtrace_cb cb, coro_context *coro_ctx, void *cb_ctx);
 
 void
 backtrace_proc_cache_clear(void);
+
+void NOINLINE
+backtrace_collect_ip(void **ip_buf, int limit);
+
+void
+backtrace_foreach_ip(backtrace_cb cb, void **ip_buf, int limit,
+		     void *cb_ctx);
 
 #endif /* ENABLE_BACKTRACE */
 

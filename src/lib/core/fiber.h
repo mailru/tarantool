@@ -111,6 +111,18 @@ struct cpu_stat {
 
 #endif /* ENABLE_FIBER_TOP */
 
+#if ENABLE_BACKTRACE
+
+enum {
+	/**
+	 * Maximum entries count to grab
+	 * from the fiber creation backtrace.
+	 */
+	FIBER_PARENT_BT_MAX = 8
+};
+
+#endif /* ENABLE_BACKTRACE */
+
 enum {
 	/** Both limits include terminating 0. */
 	FIBER_NAME_INLINE = 40,
@@ -521,6 +533,7 @@ struct txn;
 struct credentials;
 struct lua_State;
 struct ipc_wait_pad;
+struct parent_bt_lua;
 
 struct fiber {
 	coro_context ctx;
@@ -627,6 +640,12 @@ struct fiber {
 			 * Optional fiber.storage Lua reference.
 			 */
 			int ref;
+#if ENABLE_BACKTRACE
+			/**
+			 * Lua parent backtrace (may be NULL)
+			 */
+			struct parent_bt_lua *parent_bt;
+#endif /* ENABLE_BACKTRACE */
 		} lua;
 		/**
 		 * Iproto sync.
@@ -645,6 +664,10 @@ struct fiber {
 	 */
 	char *name;
 	char inline_name[FIBER_NAME_INLINE];
+#if ENABLE_BACKTRACE
+	/** Fiber creation backtrace chunk. */
+	void *parent_bt_ip_buf[FIBER_PARENT_BT_MAX];
+#endif /* ENABLE_BACKTRACE */
 };
 
 /** Invoke on_stop triggers and delete them. */
@@ -859,6 +882,17 @@ fiber_top_enable(void);
 void
 fiber_top_disable(void);
 #endif /* ENABLE_FIBER_TOP */
+
+#if ENABLE_BACKTRACE
+bool
+fiber_parent_bt_is_enabled(void);
+
+void
+fiber_parent_bt_enable(void);
+
+void
+fiber_parent_bt_disable(void);
+#endif /* ENABLE_BACKTRACE */
 
 /** Useful for C unit tests */
 static inline int
