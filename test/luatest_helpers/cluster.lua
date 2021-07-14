@@ -10,11 +10,11 @@ local datadir = fio.pathjoin(root, 'tmp', 'quorum_test')
 local DEFAULT_CHECKPOINT_PATTERNS = {"*.snap", "*.xlog", "*.vylog",
                                      "*.inprogress", "[0-9]*/"}
 
+local SOCKET_DIR = require('fio').cwd()
 local Cluster = {
     CONNECTION_TIMEOUT = 5,
     CONNECTION_RETRY_DELAY = 0.1,
-
-    base_http_port = 3310,
+    base_port = 3310,
 }
 
 function Cluster:new(object)
@@ -31,7 +31,7 @@ function Cluster:inherit(object)
     self.__index = self
     self.servers = {}
     self.built_servers = {}
-    fio.rmtree(datadir)
+--     fio.rmtree(datadir)
     self.server_command = fio.pathjoin(root, '../test/replication-luatest', 'quorum.lua')
     return object
 end
@@ -62,7 +62,6 @@ function Cluster:drop_cluster(servers)
             log.info('try to stop server: %s', server.alias)
             server:stop()
             self:cleanup(server.workdir)
-            fio.rmtree(server.workdir)
         end
     end
 end
@@ -78,7 +77,7 @@ function Cluster:get_index(server)
 end
 
 function Cluster:delete_server(server)
-    local idx = get_index(server)
+    local idx = self:get_index(server)
     if idx == nil then
         print("Key does not exist")
     else
@@ -87,16 +86,15 @@ function Cluster:delete_server(server)
 end
 
 function Cluster:stop()
-    for _, server in ipairs(self.built_servers) do
-        log.info('try to stop server: %s', server.alias)
-        server:stop()
-    end
+    self:drop_cluster(self.built_servers)
 end
 
 function Cluster:start()
     for _, server in ipairs(self.servers) do
         log.info("cluster start server: " .. server.alias)
-        server:start()
+        if not server.process then
+            server:start()
+        end
     end
     t.helpers.retrying({timeout = 20},
         function()
@@ -108,34 +106,30 @@ function Cluster:start()
         end
     )
     for _, server in ipairs(self.servers) do
-        log.info(server)
         t.assert_equals(server.net_box.state, 'active',
             'wrong state for server="%s"', server.alias)
     end
+    log.info('cluster was started')
 end
 
-function Cluster:build_server(config, replicaset_config)
+function Cluster:build_server(config, replicaset_config, engine, instance_file)
     replicaset_config = replicaset_config or {}
-    local server_id = #self.built_servers + 1
-
     local server_config = {
         alias = replicaset_config.alias,
-        command = fio.pathjoin(root, '../test/replication-luatest', replicaset_config.alias .. '.lua'),
+        command = fio.pathjoin(root, '../test/instance_files/', instance_file),
         workdir = nil,
-        net_box_port = self.base_http_port and (self.base_http_port + server_id),
+        net_box_port = fio.pathjoin(SOCKET_DIR, replicaset_config.alias..'.sock'),
     }
     for key, value in pairs(config) do
         server_config[key] = value
     end
     assert(server_config.alias, 'Either replicaset.alias or server.alias must be given')
     if server_config.workdir == nil then
-
-        workdir = fio.pathjoin(datadir, server_config.alias)
+        local workdir = fio.pathjoin(datadir, server_config.alias, engine)
         fio.mktree(workdir)
         server_config.workdir = workdir
     end
-    log.info(server_config)
-    server = Server:new(server_config)
+    local server = Server:new(server_config)
     table.insert(self.built_servers, server)
     return server
 end
@@ -149,8 +143,8 @@ function Cluster:join_server(server)
     table.insert(self.servers, server)
 end
 
-function Cluster:build_and_join_server(config, replicaset_config)
-    local server = self:build_server(config, replicaset_config)
+function Cluster:build_and_join_server(config, replicaset_config, engine)
+    local server = self:build_server(config, replicaset_config, engine)
     self:join_server(server)
     return server
 end

@@ -109,13 +109,13 @@ files["test/swim/box.lua"] = {
         "uri",
     }
 }
-files["test/replication/replica_quorum.lua"] = {
+files["test/instance_files/replica_quorum.lua"] = {
     globals = {
         "INSTANCE_URI",
         "nonexistent_uri",
     },
 }
-files["test/replication-luatest/replica_quorum.lua"] = {
+files["test/instance_files/replica_quorum.lua"] = {
     globals = {
         "INSTANCE_URI",
         "nonexistent_uri",

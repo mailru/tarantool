@@ -1,13 +1,12 @@
 #!/usr/bin/env tarantool
-
+local SOCKET_DIR = require('fio').cwd()
 local QUORUM = tonumber(arg[1])
 local TIMEOUT = arg[2] and tonumber(arg[2]) or 0.1
 local CONNECT_TIMEOUT = arg[3] and tonumber(arg[3]) or 10
--- INSTANCE_URI = SOCKET_DIR .. '/replica_quorum.sock'
 
 function nonexistent_uri(id)
-    return 'localhost:'..(1000 + id)
---     return SOCKET_DIR .. '/replica_quorum' .. (1000 + id) .. '.sock'
+--     return 'localhost:'..(1000 + id)
+    return SOCKET_DIR .. '/replica_quorum' .. id .. '.sock'
 end
 
 box.cfg{
@@ -20,5 +19,8 @@ box.cfg{
                    nonexistent_uri(1),
                    nonexistent_uri(2)}
 }
+box.once("bootstrap", function()
+    box.schema.user.grant('guest','read,write,execute,create,drop,alter','universe')
+    box.schema.user.grant('guest', 'replication')
+end)
 
-box.schema.user.grant('guest','read,write,execute,create,drop,alter,replication','universe')

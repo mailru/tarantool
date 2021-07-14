@@ -1,10 +1,10 @@
 #!/usr/bin/env tarantool
-
+local SOCKET_DIR = require('fio').cwd()
 local TIMEOUT = tonumber(arg[1])
 
 local function instance_uri(instance_id)
-    return 'localhost:'..(3314 + instance_id)
---     return SOCKET_DIR..'/master_quorum'..instance_id..'.sock';
+--     return 'localhost:'..(3314 + instance_id)
+    return SOCKET_DIR..'/master_quorum'..(instance_id)..'.sock';
 end
 
 local workdir = os.getenv('TARANTOOL_WORKDIR')
@@ -19,11 +19,8 @@ box.cfg({
     replication_timeout = TIMEOUT;
 })
 
-local test_run = require('test_run').new()
-local engine = test_run:get_cfg('engine')
-
 box.once("bootstrap", function()
     box.schema.user.grant('guest','read,write,execute,create,drop,alter,replication','universe')
-    box.schema.space.create('test', {engine = engine})
+    box.schema.space.create('test', {engine = os.getenv('ENGINE')})
     box.space.test:create_index('primary')
 end)

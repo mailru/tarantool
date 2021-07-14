@@ -1,49 +1,72 @@
 local t = require('luatest')
 local log = require('log')
 local fio = require('fio')
-local g = t.group()
 local Process = t.Process
-local Server = t.Server
 local fiber = require('fiber')
 local root = fio.dirname(fio.dirname(fio.abspath(package.search('test.helper')))) -- luacheck: ignore
 local datadir = fio.pathjoin(root, 'tmp', 'quorum_test')
-local test_run = require('test_run').new()
 local Cluster =  require('cluster')
-
+local pgroup = require('pgroup')
 local COUNT = 100
 
-cluster = Cluster:new({})
+local pgroup = pgroup.new('quorum', {
+    engine = {'memtx', 'vinyl'},
+})
 
-g.before_all = function()
+local workdir = fio.pathjoin(datadir, 'flomaster')
 
-    quorum1 = cluster:build_server({args = {'0.1'},}, {alias = 'quorum1', })
-    quorum2 = cluster:build_server({args = {'0.1'},}, {alias = 'quorum2', })
-    quorum3 = cluster:build_server({args = {'0.1'},}, {alias = 'quorum3', })
-    replica = cluster:build_server({}, {alias = 'replica_no_quorum'})
-    master_quorum1 = cluster:build_server({args = {'0.1'},}, {alias = 'master_quorum1', })
-    master_quorum2 = cluster:build_server({args = {'0.1'},}, {alias = 'master_quorum2', })
-    replica_quorum = cluster:build_server({args = {'1', '0.05', '10'}}, {alias = 'replica_quorum'})
+local cluster
+local quorum1, quorum2, quorum3
+local master_quorum1, master_quorum2
+local replica_quorum
 
-    local workdir = fio.pathjoin(datadir, 'master')
+pgroup:set_before_each(function(g)
+
+    local engine = g.params.engine
+    fio.mktree(workdir)
+    cluster = Cluster:new({})
+    quorum1 = cluster:build_server({args = {'0.1'},}, {alias = 'quorum1', }, engine, 'quorum.lua')
+    quorum2 = cluster:build_server({args = {'0.1'},}, {alias = 'quorum2', }, engine, 'quorum.lua')
+    quorum3 = cluster:build_server({args = {'0.1'},}, {alias = 'quorum3', }, engine, 'quorum.lua')
+    master_quorum1 = cluster:build_server({args = {'0.1'},}, {alias = 'master_quorum1', }, engine, 'master_quorum.lua')
+    master_quorum2 = cluster:build_server({args = {'0.1'},}, {alias = 'master_quorum2', }, engine, 'master_quorum.lua')
+    replica_quorum = cluster:build_server(
+        {args = {'1', '0.05', '10'}}, {alias = 'replica_quorum'}, engine, 'replica_quorum.lua')
+
     fio.mktree(workdir)
     pcall(log.cfg, {level = 6})
 
-    box.cfg({
-        work_dir = workdir,
-        listen = 'localhost:3310'
-    })
-    box.schema.user.grant('guest', 'read,write,execute', 'universe')
     fio.mktree(fio.pathjoin(datadir, 'common'))
+end)
 
-end
-
-g.after_all = function()
+pgroup:set_after_each(function()
+    cluster.servers = nil
     cluster:stop()
     fio.rmtree(datadir)
+end)
+
+
+local function check_follow_all_master(servers)
+    for i = 1, #servers do
+        if servers[i]:eval('return box.info.id') ~= i then
+            t.helpers.retrying({timeout = 10}, function()
+               t.assert_equals(servers[i]:eval(
+                   'return box.info.replication[' .. i .. '].upstream.status'),
+                   'follow',
+                   servers[i].alias .. ': this server does not follow others.')
+            end)
+        end
+    end
 end
 
-g.test_replica_is_orphan_after_restart = function()
-    log.info("start test_replica_is_orphan_after_restart")
+pgroup:set_before_test('test_replica_is_orphan_after_restart', function()
+    cluster:join_server(quorum1)
+    cluster:join_server(quorum2)
+    cluster:join_server(quorum3)
+    cluster:start()
+end)
+
+pgroup:add('test_replica_is_orphan_after_restart', function()
     -- Stop one replica and try to restart another one.
     -- It should successfully restart, but stay in the
     -- 'orphan' mode, which disables write accesses.
@@ -52,15 +75,10 @@ g.test_replica_is_orphan_after_restart = function()
     -- * reconfigure replication
     -- * reset box.cfg.replication_connect_quorum
     -- * wait until a quorum is formed asynchronously
-    cluster:join_server(quorum1)
-    cluster:join_server(quorum2)
-    cluster:join_server(quorum3)
-    cluster:start()
-
-
+    check_follow_all_master({quorum1, quorum2, quorum3})
     quorum1:stop()
     quorum2:restart({'0.1', '10'})
-    t.helpers.retrying({timeout = 15}, function()
+    t.helpers.retrying({timeout = 20}, function()
         t.assert(Process.is_pid_alive(quorum2.process.pid))
         quorum2:connect_net_box()
     end)
@@ -84,7 +102,7 @@ g.test_replica_is_orphan_after_restart = function()
     t.assert_str_matches(
         quorum2:eval('return box.info.status'), 'running')
     quorum2:restart({'0.1', '10'})
-    t.helpers.retrying({timeout = 15}, function()
+    t.helpers.retrying({timeout = 20}, function()
         t.assert(Process.is_pid_alive(quorum2.process.pid))
         quorum2:connect_net_box()
     end)
@@ -95,7 +113,7 @@ g.test_replica_is_orphan_after_restart = function()
             quorum2:eval('return box.ctl.wait_rw(0.001)')
     end)
     t.assert(quorum2:eval('return box.info.ro'))
-    t.helpers.retrying({timeout = 20}, function()
+    t.helpers.retrying({timeout = 10}, function()
         t.assert(quorum2:eval('return box.space.test ~= nil'))
     end)
     t.assert_error_msg_content_equals(
@@ -104,13 +122,14 @@ g.test_replica_is_orphan_after_restart = function()
             quorum2:eval('return box.space.test:replace{100}')
         end
     )
+
     quorum2:eval('box.cfg{replication_connect_quorum = 2}')
     quorum2:eval('return box.ctl.wait_rw()')
     t.assert_not(quorum2:eval('return box.info.ro'))
     t.assert_str_matches(
         quorum2:eval('return box.info.status'), 'running')
     quorum2:restart({'0.1', '10'})
-    t.helpers.retrying({timeout = 15}, function()
+    t.helpers.retrying({timeout = 40}, function()
         t.assert(Process.is_pid_alive(quorum2.process.pid))
         quorum2:connect_net_box()
     end)
@@ -121,7 +140,7 @@ g.test_replica_is_orphan_after_restart = function()
             quorum2:eval('return box.ctl.wait_rw(0.001)')
     end)
     t.assert(quorum2:eval('return box.info.ro'))
-    t.helpers.retrying({timeout = 20}, function()
+    t.helpers.retrying({timeout = 10}, function()
         t.assert(quorum2:eval('return box.space.test ~= nil'))
     end)
     t.assert_error_msg_content_equals(
@@ -144,29 +163,20 @@ g.test_replica_is_orphan_after_restart = function()
     quorum1:eval('return box.ctl.wait_rw()')
     t.assert_not(quorum1:eval('return box.info.ro'))
     t.assert_str_matches(quorum1:eval('return box.info.status'), 'running')
-end
 
-g.test_replica_follows_all_masters = function()
-    -- Check that the replica follows all masters.
---     log.info("start test")
---     cluster:join_server(quorum1)
---     cluster:join_server(quorum2)
---     cluster:join_server(quorum3)
---     cluster:start({quorum1, quorum2, quorum3})
-    local servers = {quorum1, quorum2, quorum3}
-    for i = 1, #servers do
-        if servers[i]:eval('return box.info.id') ~= i then
-            t.helpers.retrying({timeout = 20}, function()
-               t.assert_equals(servers[i]:eval(
-                   'return box.info.replication[' .. i .. '].upstream.status'),
-                   'follow',
-                   servers[i].alias .. ': this server does not follow others.')
-            end)
-        end
-    end
-end
+end)
 
-g.test_box_cfg_doesnt_return_before_all_replicas_are_not_configured = function()
+pgroup:set_before_test(
+'test_box_cfg_doesnt_return_before_all_replicas_are_not_configured', function()
+    cluster:join_server(quorum1)
+    cluster:join_server(quorum2)
+    cluster:join_server(quorum3)
+    cluster:start()
+end)
+
+pgroup:add('test_box_cfg_doesnt_return_before_all_replicas_are_not_configured',
+function()
+    check_follow_all_master({quorum1, quorum2, quorum3})
     -- Check that box.cfg() doesn't return until the instance
     -- catches up with all configured replicas.
     t.assert_equals(
@@ -178,12 +188,14 @@ g.test_box_cfg_doesnt_return_before_all_replicas_are_not_configured = function()
             'return box.error.injection.set("ERRINJ_RELAY_TIMEOUT", 0.001)'),
         'ok')
     quorum1:stop()
-    t.helpers.retrying({timeout = 20}, function()
+    t.helpers.retrying({timeout = 10}, function()
         t.assert_not_equals(
             quorum2:eval('return box.space.test.index.primary'), nil)
+        quorum2:eval(
+            'for i = 1, ' .. COUNT .. ' do box.space.test:insert{i} end')
+
     end)
-    quorum2:eval(
-        'for i = 1, ' .. COUNT .. ' do box.space.test:insert{i} end')
+
     quorum2:eval("fiber = require('fiber')")
     quorum2:eval('fiber.sleep(0.1)')
     quorum1.args = {'0.1'}
@@ -197,7 +209,7 @@ g.test_box_cfg_doesnt_return_before_all_replicas_are_not_configured = function()
     )
     t.assert_equals(quorum1.net_box.state, 'active',
         'wrong state for server="%s"', quorum1.alias)
-    t.helpers.retrying({timeout = 20}, function()
+    t.helpers.retrying({timeout = 10}, function()
         t.assert_equals(
             quorum1:eval('return box.space.test:count()'), COUNT)
     end)
@@ -211,9 +223,27 @@ g.test_box_cfg_doesnt_return_before_all_replicas_are_not_configured = function()
     for _, server in ipairs(servers) do
         t.assert_equals(server:eval('return box.snapshot()'), 'ok')
     end
-end
 
-g.test_id_for_rebootstrapped_replica_with_removed_xlog = function()
+end)
+
+pgroup:set_before_test('test_id_for_rebootstrapped_replica_with_removed_xlog',
+function()
+
+    cluster:join_server(quorum1)
+    cluster:join_server(quorum2)
+    cluster:join_server(quorum3)
+    cluster:start()
+    check_follow_all_master({quorum1, quorum2, quorum3})
+    t.helpers.retrying({timeout = 10},
+        function()
+            quorum2:eval(
+                'for i = 1, ' .. COUNT .. ' do box.space.test:insert{i} end')
+        end
+    )
+
+end)
+
+pgroup:add('test_id_for_rebootstrapped_replica_with_removed_xlog', function()
     quorum1:stop()
     cluster:cleanup(quorum1.workdir)
     fio.rmtree(quorum1.workdir)
@@ -222,7 +252,7 @@ g.test_id_for_rebootstrapped_replica_with_removed_xlog = function()
     -- because ids 1..3 are busy.
     quorum1.args = {'0.1'}
     quorum1:start()
-    t.helpers.retrying({timeout = 20},
+    t.helpers.retrying({timeout = 10},
         function()
             t.assert(Process.is_pid_alive(quorum1.process.pid),
                     quorum1.alias .. ' failed on start')
@@ -231,7 +261,7 @@ g.test_id_for_rebootstrapped_replica_with_removed_xlog = function()
     )
     t.assert_equals(quorum1.net_box.state, 'active',
         'wrong state for server="%s"', quorum1.alias)
-    t.helpers.retrying({timeout = 20}, function()
+    t.helpers.retrying({timeout = 10}, function()
         t.assert_equals(
             quorum1:eval('return box.space.test:count()'), COUNT)
         t.assert_equals(
@@ -249,61 +279,18 @@ g.test_id_for_rebootstrapped_replica_with_removed_xlog = function()
     t.assert_equals(
         quorum3:eval('return box.info.replication[4].upstream.status'),
         'follow')
-    cluster:drop_cluster({quorum1, quorum2, quorum3})
-end
+end)
 
-g.test_replication_no_quorum = function()
-     -- gh-3278: test different replication and replication_connect_quorum configs.
---      TODO: remove test_run by providing parameterized test
-    test_run = require('test_run').new()
-    local space = box.schema.space.create('test', {engine = test_run:get_cfg('engine')})
-    local index = box.space.test:create_index('primary') -- luacheck: ignore
-    -- Insert something just to check that replica with quorum = 0 works as expected.
-    t.assert_equals(space:insert{1}, {1})
-    replica:start()
-    t.helpers.retrying({timeout = 20},
-        function()
-            t.assert(Process.is_pid_alive(replica.process.pid),
-                    replica.alias .. ' failed on start')
-            replica:connect_net_box()
-        end
-    )
-    t.assert_str_matches(
-        replica:eval('return box.info.status'), 'running')
-    t.assert_equals(
-        replica:eval('return box.space.test:select()'), {{1}})
-    replica:stop()
-    local listen = box.cfg.listen
-    box.cfg{listen = ''}
-    replica:start()
-    t.helpers.retrying({timeout = 20},
-        function()
-            t.assert(Process.is_pid_alive(replica.process.pid),
-                    replica.alias .. ' failed on start')
-            replica:connect_net_box()
-        end
-    )
-    t.assert_str_matches(
-        replica:eval('return box.info.status'), 'running')
+pgroup:set_before_test('test_master_master_works', function()
+    cluster:join_server(master_quorum1)
+    cluster:join_server(master_quorum2)
+end)
 
-    -- Check that replica is able to reconnect, case was broken with earlier quorum "fix".
-    box.cfg{listen = listen}
-    t.assert_equals(space:insert{2}, {2})
---  TODO: fix vclock
-    local fiber = require('fiber')
-    fiber.sleep(2)
-    local vclock = box.info.vclock
-    vclock[0] = nil
-    t.assert_str_matches(
-        replica:eval('return box.info.status'), 'running')
-    t.assert_equals(box.space.test:select(), {{1}, {2}})
-    t.assert_equals(
-        replica:eval('return box.space.test:select()'), {{1}, {2}})
-    space:drop()
-    cluster:drop_cluster({replica})
-end
+pgroup:set_after_test('test_master_master_works', function()
+    cluster:drop_cluster({master_quorum1, master_quorum2})
+end)
 
-g.test_master_master_works = function()
+pgroup:add('test_master_master_works', function()
     master_quorum1:start()
     master_quorum2:start()
     t.helpers.retrying({timeout = 20},
@@ -328,11 +315,17 @@ g.test_master_master_works = function()
     fiber.sleep(2)
     t.assert_equals(
         master_quorum2:eval('return box.space.test:select()'), {{1}})
+end)
 
-    cluster:drop_cluster({master_quorum1, master_quorum2})
-end
+pgroup:set_before_test('test_quorum_during_reconfiguration', function()
+    cluster:join_server(replica_quorum)
+end)
 
-g.test_quorum_during_reconfiguration = function()
+pgroup:set_after_test('test_quorum_during_reconfiguration', function()
+    cluster:drop_cluster({replica_quorum})
+end)
+
+pgroup:add('test_quorum_during_reconfiguration', function()
     -- Test that quorum is not ignored neither during bootstrap, nor
     -- during reconfiguration.
 
@@ -343,14 +336,15 @@ g.test_quorum_during_reconfiguration = function()
             t.assert(Process.is_pid_alive(replica_quorum.process.pid),
                     replica_quorum.alias .. ' failed on start')
             replica_quorum:connect_net_box()
+--             TODO: with what error?
+             -- If replication_connect_quorum was ignored here, the instance
+            -- would exit with an error.
+            t.assert_equals(
+            replica_quorum:eval(
+                'return box.cfg{replication={INSTANCE_URI, nonexistent_uri(1)}}'),
+    nil)
         end
     )
-    -- If replication_connect_quorum was ignored here, the instance
-    -- would exit with an error.
-    t.assert_equals(
-        replica_quorum:eval(
-            'return box.cfg{replication={INSTANCE_URI, nonexistent_uri(1)}}'),
-        nil)
+
     t.assert_equals(replica_quorum:eval('return box.info.id'), 1)
-    cluster:drop_cluster({replica_quorum})
-end
+end)
